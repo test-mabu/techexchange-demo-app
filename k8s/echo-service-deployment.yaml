@@ -1,0 +1,158 @@
+# Deployment for Vulnerable Echo Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vulnerable-echo-service
+  namespace: ${NAMESPACE}
+  labels:
+    app: vulnerable-echo-service
+    version: v1.0.0-vulnerable
+    component: backend
+    tier: api
+    vulnerability: log4j-cve-2021-44228
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: vulnerable-echo-service
+  template:
+    metadata:
+      labels:
+        app: vulnerable-echo-service
+        version: v1.0.0-vulnerable
+        component: backend
+        tier: api
+        vulnerability: log4j-cve-2021-44228
+      annotations:
+        instana.io/monitored: "true"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8085"
+        prometheus.io/path: "/actuator/prometheus"
+        vulnerability.scanner.io/ignore: "false"
+        security.policy.io/profile: "test-only"
+        security.vulnerability.io/cve: "CVE-2021-44228"
+        kubectl.kubernetes.io/default-container: vulnerable-echo-service
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+      - name: vulnerable-echo-service
+        image: ${IMAGE_REGISTRY}/${IMAGE_REPOSITORY}:${IMAGE_TAG}
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8085
+          name: http
+          protocol: TCP
+        - containerPort: 8080
+          name: management
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: vulnerable-echo-config
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: SPRING_PROFILES_ACTIVE
+          value: "production,vulnerable"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "100m"
+            ephemeral-storage: "1Gi"
+          limits:
+            memory: "1Gi"
+            cpu: "250m"
+            ephemeral-storage: "3Gi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8085
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 15
+          timeoutSeconds: 10
+          failureThreshold: 3
+          successThreshold: 1
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8085
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+          successThreshold: 1
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8085
+          initialDelaySeconds: 20
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 15
+        volumeMounts:
+        - name: log-volume
+          mountPath: /app/logs
+        - name: tmp-volume
+          mountPath: /tmp
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - NET_BIND_SERVICE
+      volumes:
+      - name: log-volume
+        emptyDir:
+          sizeLimit: 1Gi
+      - name: tmp-volume
+        emptyDir: {}
+
+---
+# Service for Vulnerable Echo Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: vulnerable-echo-service
+  namespace: ${NAMESPACE}
+  labels:
+    app: vulnerable-echo-service
+    component: backend
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8085"
+    prometheus.io/path: "/actuator/prometheus"
+    service.vulnerability.io/status: "vulnerable"
+    service.vulnerability.io/cve: "CVE-2021-44228"
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8085
+    targetPort: 8085
+    protocol: TCP
+    name: http
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: management
+  selector:
+    app: vulnerable-echo-service

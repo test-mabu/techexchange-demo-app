@@ -1,0 +1,44 @@
+# ONLINE build variant — used automatically by the pipeline when the runner
+# has no staged offline assets (see "Determine build mode" step).
+# Same stages/labels/user/env as the offline Dockerfile; Maven resolves
+# dependencies from the internet instead of the pre-populated .m2, and curl
+# is installed from Debian mirrors instead of the staged static binary.
+FROM maven:3.8.4-eclipse-temurin-11 AS build
+WORKDIR /app
+COPY pom.xml .
+COPY src ./src
+# Online: no -o / no .m2 COPY — Maven Central is reachable.
+RUN mvn -B package -DskipTests
+
+FROM eclipse-temurin:11.0.17_8-jre
+LABEL vulnerability="CVE-2021-44228"
+LABEL log4j-version="2.14.1"
+
+# Alternative newer runtime base image:
+# FROM eclipse-temurin:11.0.29_7-jre
+# LABEL vulnerability=""
+# LABEL log4j-version="2.25.2"
+
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+# curl for the healthcheck (online: Debian mirrors)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=build /app/target/vulnerable-echo-service-*.jar app.jar
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
+ENV JAVA_OPTS="-Xmx512m -Xms256m"
+ENV SERVER_PORT=8085
+ENV LOG4J2_DISABLE_JNDI=false
+
+EXPOSE 8085
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:${SERVER_PORT}/health || exit 1
+
+CMD java $JAVA_OPTS -Dserver.port=$SERVER_PORT -jar app.jar

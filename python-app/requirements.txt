@@ -1,0 +1,31 @@
+Flask==3.0.3
+Werkzeug==3.0.3
+requests==2.32.3
+psutil==6.0.0
+waitress==3.0.0
+Jinja2==3.1.4
+MarkupSafe==2.1.5
+click==8.1.7
+itsdangerous==2.2.0
+blinker==1.8.2
+certifi==2024.7.4
+charset-normalizer==3.3.2
+idna==3.7
+urllib3==2.2.2
+# instana tracing agent + its required transitive dep
+instana
+autowrapt==1.0
+# kubernetes client + transitive deps
+kubernetes
+google-auth>=2.0.0
+cachetools>=4.0.0
+pyasn1-modules>=0.2.1
+pyasn1>=0.4.6
+rsa>=4.0
+requests-oauthlib>=1.0.0
+oauthlib>=3.0.0
+durationpy>=0.9
+websocket-client>=1.0.0
+six>=1.10.0
+python-dateutil>=2.7.0
+PyYAML>=5.4

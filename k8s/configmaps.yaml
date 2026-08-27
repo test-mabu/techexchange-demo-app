@@ -1,0 +1,25 @@
+# ConfigMap for Load Test App
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: load-test-config
+  namespace: ${NAMESPACE}
+data:
+  PORT: "8080"
+  HOST: "0.0.0.0"
+  FLASK_ENV: "production"
+  LOG_LEVEL: "INFO"
+  ECHO_SERVICE_URL: "http://vulnerable-echo-service:8085"
+
+---
+# ConfigMap for Vulnerable Echo Service
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vulnerable-echo-config
+  namespace: ${NAMESPACE}
+data:
+  SERVER_PORT: "8085"
+  JAVA_OPTS: "-Xmx512m -Xms256m -Dlog4j.configurationFile=/app/log4j2.xml"
+  LOG4J_FORMAT_MSG_NO_LOOKUPS: "false"  # VULNERABLE
+  LOG4J2_DISABLE_JNDI: "false"  # VULNERABLE

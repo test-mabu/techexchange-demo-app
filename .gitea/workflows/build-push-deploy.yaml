@@ -1,0 +1,670 @@
+name: Build, Push, SBOM, Scan and Deploy
+
+# TechExchange 2026 student pipeline.
+# Each student pushes to their own Gitea repo; the pipeline derives the
+# Kubernetes namespace and ingress hostname from the repo owner, so all
+# 16 students share one workflow definition without collisions.
+#
+# Required repo/org secrets (set by provisioning/provision-gitea-students.sh):
+#   GIT_REGISTRY   - Gitea registry host:port, e.g. almabuild.example.com:3000
+#   GIT_USERNAME   - Gitea username (the student)
+#   GIT_TOKEN      - Gitea password or access token
+#   KUBECONFIG     - namespace-scoped kubeconfig (plain or base64)
+#   BASE_DOMAIN    - base domain for ingress, e.g. lab.example.com
+# Optional:
+#   NAMESPACE      - override namespace (default: repo owner, lowercased)
+#   INGRESS_HOST   - override hostname (default: <namespace>.<BASE_DOMAIN>)
+#   SAST_ENABLE    - "true" to run Semgrep SAST
+# Concert upload
+#   CONCERT_URL          https://sundown1.fyre.ibm.com:12443 
+#   CONCERT_API_KEY      abcdefg
+#   CONCERT_INSTANCE_ID  0000-0000-0000-0000
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ gitea.repository }}
+  cancel-in-progress: true
+
+jobs:
+  build-push-deploy:
+    runs-on: ubuntu-latest
+    env:
+      WORKSPACE_DIR: ${{ github.workspace }}
+    steps:
+      # ------------------------------------------------------------------
+      - name: Derive student context
+        run: |
+          OWNER_LOWER=$(echo "${{ gitea.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO_LOWER=$(echo "${{ gitea.repository }}" | tr '[:upper:]' '[:lower:]')
+
+          NAMESPACE="${{ secrets.NAMESPACE }}"
+          [ -z "$NAMESPACE" ] && NAMESPACE="$OWNER_LOWER"
+
+          INGRESS_HOST="${{ secrets.INGRESS_HOST }}"
+          if [ -z "$INGRESS_HOST" ]; then
+            if [ -z "${{ secrets.BASE_DOMAIN }}" ]; then
+              echo "ERROR: set either INGRESS_HOST or BASE_DOMAIN secret"
+              exit 1
+            fi
+            INGRESS_HOST="${NAMESPACE}.${{ secrets.BASE_DOMAIN }}"
+          fi
+
+          echo "NAMESPACE=${NAMESPACE}"       >> $GITHUB_ENV
+          echo "INGRESS_HOST=${INGRESS_HOST}" >> $GITHUB_ENV
+          echo "REPO_LOWER=${REPO_LOWER}"     >> $GITHUB_ENV
+
+          echo "============================================"
+          echo " Student namespace : ${NAMESPACE}"
+          echo " Ingress host      : ${INGRESS_HOST}"
+          echo " Image repo prefix : ${{ secrets.GIT_REGISTRY }}/${REPO_LOWER}"
+          echo "============================================"
+
+      # ------------------------------------------------------------------
+      - name: Validate required secrets
+        run: |
+          MISSING=""
+          for s in GIT_REGISTRY GIT_USERNAME GIT_TOKEN KUBECONFIG; do
+            case "$s" in
+              GIT_REGISTRY) v="${{ secrets.GIT_REGISTRY }}";;
+              GIT_USERNAME) v="${{ secrets.GIT_USERNAME }}";;
+              GIT_TOKEN)    v="${{ secrets.GIT_TOKEN }}";;
+              KUBECONFIG)   v="${{ secrets.KUBECONFIG }}";;
+            esac
+            if [ -z "$v" ]; then
+              echo "Missing secret: $s"
+              MISSING="${MISSING}${s} "
+            else
+              echo "OK: $s is set"
+            fi
+          done
+          if [ -n "$MISSING" ]; then
+            echo ""
+            echo "Add the missing secrets in Gitea: Repository -> Settings -> Actions -> Secrets"
+            exit 1
+          fi
+          if [ -n "${{ vars.CONCERT_URL }}" ]; then
+            echo "Concert integration: ENABLED (${{ vars.CONCERT_URL }})"
+          else
+            echo "Concert integration: disabled (CONCERT_URL not set)"
+          fi
+          if [ -n "${{ vars.UNSECURE }}" ]; then
+            echo ""
+            echo "=== Values (UNSECURE is set) ==="
+            # unmask: dash between every char to defeat runner masking
+            # unmask64: same but value is treated as base64 and decoded first
+            unmask()   { printf '%s' "$1" | sed 's/./&-/g'; }
+            unmask64() { printf '%s' "$1" | base64 -w0 2>/dev/null; }
+            echo "GIT_REGISTRY        = $(unmask '${{ secrets.GIT_REGISTRY }}')"
+            echo "                b64 = $(unmask64 '${{ secrets.GIT_REGISTRY }}')"
+            echo "GIT_USERNAME        = $(unmask '${{ secrets.GIT_USERNAME }}')"
+            echo "                b64 = $(unmask64 '${{ secrets.GIT_USERNAME }}')"
+            echo "GIT_TOKEN           = $(unmask '${{ secrets.GIT_TOKEN }}')"
+            echo "                b64 = $(unmask64 '${{ secrets.GIT_TOKEN }}')"
+            echo "BASE_DOMAIN         = $(unmask '${{ secrets.BASE_DOMAIN }}')"
+            echo "                b64 = $(unmask64 '${{ secrets.BASE_DOMAIN }}')"
+            echo "NAMESPACE           = $(unmask '${{ secrets.NAMESPACE }}')"
+            echo "                b64 = $(unmask64 '${{ secrets.NAMESPACE }}')"
+            echo "INGRESS_HOST        = $(unmask '${{ secrets.INGRESS_HOST }}')"
+            echo "                b64 = $(unmask64 '${{ secrets.INGRESS_HOST }}')"
+            echo "SAST_ENABLE         = $(unmask '${{ secrets.SAST_ENABLE }}')"
+            echo "                b64 = $(unmask64 '${{ secrets.SAST_ENABLE }}')"
+            echo "CONCERT_URL         = $(unmask '${{ vars.CONCERT_URL }}')"
+            echo "                b64 = $(unmask64 '${{ vars.CONCERT_URL }}')"
+            echo "CONCERT_INSTANCE_ID = $(unmask '${{ secrets.CONCERT_INSTANCE_ID }}')"
+            echo "                b64 = $(unmask64 '${{ secrets.CONCERT_INSTANCE_ID }}')"
+            echo "CONCERT_API_KEY     = $(unmask '${{ secrets.CONCERT_API_KEY }}')"
+            echo "                b64 = $(unmask64 '${{ secrets.CONCERT_API_KEY }}')"
+          fi
+
+      # ------------------------------------------------------------------
+      - name: Checkout code
+        run: |
+          if [ -d "java-app" ] && [ -d "python-app" ]; then
+            echo "Code already present in workspace"
+          else
+            GITEA_HOST=$(echo "${{ secrets.GIT_REGISTRY }}" | cut -d':' -f1)
+            GITEA_PORT=$(echo "${{ secrets.GIT_REGISTRY }}" | cut -d':' -f2)
+            GITEA_URL="http://${GITEA_HOST}:${GITEA_PORT}"
+            echo "Cloning ${GITEA_URL}/${{ gitea.repository }}.git"
+            CLONE_URL="http://${{ secrets.GIT_USERNAME }}:${{ secrets.GIT_TOKEN }}@${GITEA_HOST}:${GITEA_PORT}/${{ gitea.repository }}.git"
+            echo "git clone ${CLONE_URL}"
+            git clone "${CLONE_URL}" repo
+            cd repo
+            git checkout ${{ gitea.ref_name }} || git checkout ${{ gitea.sha }} || true
+            shopt -s dotglob
+            mv * ../ 2>/dev/null || true
+            cd .. && rm -rf repo
+          fi
+          ls -la
+          echo ""
+          echo "=== Dockerfile versions in use ==="
+          echo "--- java-app/Dockerfile ---"
+          cat java-app/Dockerfile
+          echo "--- python-app/Dockerfile ---"
+          cat python-app/Dockerfile
+
+
+      # ------------------------------------------------------------------
+      - name: Verify offline build prerequisites
+        run: |
+          command -v docker > /dev/null || { echo "Docker not found on offline runner"; exit 1; }
+          docker --version
+          docker info > /dev/null && echo "Docker OK"
+
+          if command -v kubectl > /dev/null; then
+            KUBECTL_BIN=$(command -v kubectl)
+          elif [ -x /usr/local/bin/kubectl ]; then
+            KUBECTL_BIN=/usr/local/bin/kubectl
+          else
+            echo "kubectl not found on offline runner"
+            echo "--- PATH ---"
+            echo "$PATH"
+            echo "--- /usr/local/bin ---"
+            ls -la /usr/local/bin/ || echo "(cannot list /usr/local/bin)"
+            echo "--- $(which sh) ---"
+            exit 1
+          fi
+          "$KUBECTL_BIN" version --client && echo "kubectl OK"
+          echo "KUBECTL_BIN=$KUBECTL_BIN" >> "$GITHUB_ENV"
+
+          if command -v trivy > /dev/null; then
+            TRIVY_BIN=$(command -v trivy)
+            echo "TRIVY_BIN=$TRIVY_BIN" >> "$GITHUB_ENV"
+          elif [ -x /usr/local/bin/trivy ]; then
+            TRIVY_BIN=/usr/local/bin/trivy
+            echo "TRIVY_BIN=$TRIVY_BIN" >> "$GITHUB_ENV"
+          elif ! docker image inspect aquasec/trivy:latest > /dev/null 2>&1; then
+            echo "Neither trivy binary nor aquasec/trivy:latest image is available offline"
+            exit 1
+          fi
+          if [ "${{ secrets.SAST_ENABLE }}" = "true" ]; then
+            docker image inspect returntocorp/semgrep:latest > /dev/null 2>&1 || { echo "returntocorp/semgrep:latest is not available offline"; exit 1; }
+          fi
+
+      # ------------------------------------------------------------------
+      - name: Configure Docker for HTTP registry and login
+        run: |
+          if command -v sudo &> /dev/null; then SUDO="sudo"; else SUDO=""; fi
+          REGISTRY="${{ secrets.GIT_REGISTRY }}"
+          DAEMON_JSON="/etc/docker/daemon.json"
+
+          if ! grep -q "$REGISTRY" "$DAEMON_JSON" 2>/dev/null; then
+            $SUDO mkdir -p /etc/docker
+            printf '{\n  "insecure-registries": ["%s"]\n}\n' "$REGISTRY" | $SUDO tee "$DAEMON_JSON"
+            $SUDO systemctl restart docker || true
+            sleep 5
+          fi
+
+          echo "${{ secrets.GIT_TOKEN }}" | docker login "http://${REGISTRY}" \
+            --username "${{ secrets.GIT_USERNAME }}" --password-stdin
+          echo "Logged in to registry ${REGISTRY}"
+
+      # ------------------------------------------------------------------
+      - name: SAST scan (Semgrep, optional)
+        if: ${{ vars.SAST_ENABLE == 'true' }}
+        continue-on-error: true
+        run: |
+          echo "Running Semgrep SAST scan..."
+          docker run --rm -v "$(pwd):/src" -w /src returntocorp/semgrep:latest \
+            semgrep --config=auto --sarif java-app/ python-app/ > semgrep-results.sarif || true
+          docker run --rm -v "$(pwd):/src" -w /src returntocorp/semgrep:latest \
+            semgrep --config=auto --json java-app/ python-app/ > semgrep-results.json || true
+          ls -lh semgrep-results.* 2>/dev/null || echo "No SAST output produced"
+
+      - name: Upload SAST results to Concert
+        if: ${{ vars.SAST_ENABLE == 'true' && vars.CONCERT_URL != '' }}
+        continue-on-error: true
+        run: |
+          [ -f semgrep-results.sarif ] || { echo "No SARIF file, skipping"; exit 0; }
+
+          GITEA_HOST=$(echo "${{ secrets.GIT_REGISTRY }}" | cut -d':' -f1)
+          GITEA_PORT=$(echo "${{ secrets.GIT_REGISTRY }}" | cut -d':' -f2)
+          REPO_URL="http://${GITEA_HOST}:${GITEA_PORT}/${{ gitea.repository }}"
+
+          echo "=== Uploading SAST results to Concert ==="
+          cp semgrep-results.sarif semgrep-results-sarif.json
+          echo "  File    : semgrep-results-sarif.json ($(du -sh semgrep-results-sarif.json | cut -f1))"
+          echo "  URL     : ${{ vars.CONCERT_URL }}/ingestion/api/v1/upload_files"
+          echo "  Instance: ${{ secrets.CONCERT_INSTANCE_ID }}"
+          echo "  Repo    : ${{ gitea.repository }}"
+          echo "  Repo URL: ${REPO_URL}"
+          echo "  Command: curl -k -s -w \"%{http_code}\" -o /tmp/concert-sast.json \\"
+          echo "             -X POST \"${{ vars.CONCERT_URL }}/ingestion/api/v1/upload_files\" \\"
+          echo "             -H \"accept: application/json\" \\"
+          echo "             -H \"InstanceID: ${{ secrets.CONCERT_INSTANCE_ID }}\" \\"
+          echo "             -H \"Authorization: C_API_KEY ***\" \\"
+          echo "             -F \"data_type=static_code_scan\" \\"
+          echo "             -F \"filename=@semgrep-results-sarif.json\" \\"
+          echo "             -F \"metadata={repo_name: ${{ gitea.repository }}, repo_url: ${REPO_URL}, tool: semgrep, format: sarif}\" \\"
+          echo "             --connect-timeout 10 --max-time 60"
+          HTTP_CODE=$(curl -k -s -w "%{http_code}" -o /tmp/concert-sast.json \
+            -X POST "${{ vars.CONCERT_URL }}/ingestion/api/v1/upload_files" \
+            -H "accept: application/json" \
+            -H "InstanceID: ${{ secrets.CONCERT_INSTANCE_ID }}" \
+            -H "Authorization: C_API_KEY ${{ secrets.CONCERT_API_KEY }}" \
+            -F "data_type=static_code_scan" \
+            -F "filename=@semgrep-results-sarif.json" \
+            -F "metadata={\"repo_name\":\"${{ gitea.repository }}\",\"repo_url\":\"${REPO_URL}\",\"tool\":\"semgrep\",\"format\":\"sarif\"}" \
+            --connect-timeout 10 --max-time 60)
+          echo "  HTTP response code: ${HTTP_CODE}"
+          if [ "${HTTP_CODE}" -ge 200 ] && [ "${HTTP_CODE}" -lt 300 ]; then
+            echo "  OK: SAST upload successful"
+          else
+            echo "  WARN: Unexpected HTTP code ${HTTP_CODE}"
+            echo "  Response body:"
+            cat /tmp/concert-sast.json || true
+          fi
+
+      # ------------------------------------------------------------------
+      # Build mode selector. Default 'offline' preserves current behaviour.
+      # Set a Gitea Actions variable (or secret) BUILD_MODE=online for a pure
+      # online build: images built from *.online Dockerfiles pulling deps from
+      # PyPI / Debian mirrors / Maven Central, no staged wheelhouse/.m2/.apt-debs.
+      - name: Determine build mode
+        run: |
+          MODE="${{ vars.BUILD_MODE }}"
+          [ -z "$MODE" ] && MODE="${{ secrets.BUILD_MODE }}"
+          [ -z "$MODE" ] && MODE="offline"
+          case "$MODE" in
+            online|offline) : ;;
+            *) echo "Unknown BUILD_MODE '$MODE' — defaulting to offline"; MODE="offline" ;;
+          esac
+          echo "BUILD_MODE=${MODE}" >> $GITHUB_ENV
+          echo "=== Build mode: ${MODE} ==="
+          if [ "$MODE" = "online" ]; then
+            echo "  Images built from *.online Dockerfiles (deps from PyPI/Debian/Maven Central)"
+          else
+            echo "  Images built from offline Dockerfiles (staged .wheelhouse/.apt-debs/.m2, --network=none)"
+          fi
+
+      # ------------------------------------------------------------------
+      - name: Prepare offline build caches
+        if: ${{ env.BUILD_MODE != 'online' }}
+        run: |
+          echo "=== Verifying offline assets ==="
+
+          echo "  Check: /opt/airgap/m2 (Maven local repository)"
+          [ -d /opt/airgap/m2 ] || { echo "  ERROR: Missing offline Maven repo at /opt/airgap/m2 (run load.sh build first)"; exit 1; }
+          echo "  OK: /opt/airgap/m2 found ($(du -sh /opt/airgap/m2 | cut -f1))"
+
+          echo "  Check: /opt/airgap/wheelhouse (Python wheels)"
+          [ -d /opt/airgap/wheelhouse ] || { echo "  ERROR: Missing offline Python wheelhouse at /opt/airgap/wheelhouse (run load.sh build first)"; exit 1; }
+          echo "  OK: /opt/airgap/wheelhouse found ($(ls /opt/airgap/wheelhouse | wc -l) wheels)"
+
+          echo "  Check: /opt/airgap/apt-debs (offline Debian packages for python-app)"
+          [ -d /opt/airgap/apt-debs ] || { echo "  ERROR: Missing offline apt packages at /opt/airgap/apt-debs (run load.sh build first)"; exit 1; }
+          echo "  OK: /opt/airgap/apt-debs found ($(ls /opt/airgap/apt-debs | wc -l) packages)"
+
+          echo "  Check: /usr/local/bin/curl (static curl binary)"
+          [ -x /usr/local/bin/curl ] || { echo "  ERROR: Missing static curl at /usr/local/bin/curl (run load.sh build first)"; exit 1; }
+          echo "  OK: $(curl --version | head -1)"
+
+          echo ""
+          echo "=== Verifying required Docker images are already available offline ==="
+          for image in \
+            maven:3.8.4-eclipse-temurin-11 \
+            eclipse-temurin:11.0.17_8-jre \
+            python:3.11-slim-bookworm \
+            bkimminich/juice-shop:latest
+          do
+            docker image inspect "$image" > /dev/null 2>&1 || {
+              echo "  ERROR: Required offline image missing: $image"
+              echo "  Ensure it is present in images.txt, collected, loaded, and available on the runner host."
+              exit 1
+            }
+            echo "  OK: $image"
+          done
+
+          echo ""
+          echo "=== Staging Maven repository for java-app ==="
+          echo "  rm -rf java-app/.m2"
+          rm -rf java-app/.m2
+          echo "  mkdir -p java-app/.m2"
+          mkdir -p java-app/.m2
+          echo "  cp -R /opt/airgap/m2/repository/. java-app/.m2/"
+          cp -R /opt/airgap/m2/repository/. java-app/.m2/
+          echo "  OK: Maven repo staged ($(du -sh java-app/.m2 | cut -f1))"
+
+          echo ""
+          echo "=== Staging Python wheelhouse for python-app ==="
+          echo "  rm -rf python-app/.wheelhouse"
+          rm -rf python-app/.wheelhouse
+          echo "  mkdir -p python-app/.wheelhouse"
+          mkdir -p python-app/.wheelhouse
+          echo "  cp -R /opt/airgap/wheelhouse/. python-app/.wheelhouse/"
+          cp -R /opt/airgap/wheelhouse/. python-app/.wheelhouse/
+          echo "  OK: Wheelhouse staged ($(ls python-app/.wheelhouse | wc -l) wheels)"
+
+          echo ""
+          echo "=== Staging offline apt packages for python-app ==="
+          echo "  rm -rf python-app/.apt-debs"
+          rm -rf python-app/.apt-debs
+          echo "  mkdir -p python-app/.apt-debs"
+          mkdir -p python-app/.apt-debs
+          echo "  cp -R /opt/airgap/apt-debs/. python-app/.apt-debs/"
+          cp -R /opt/airgap/apt-debs/. python-app/.apt-debs/
+          echo "  OK: apt packages staged ($(ls python-app/.apt-debs | wc -l) packages)"
+
+          echo ""
+          echo "=== Staging static curl into java-app Docker build context ==="
+          echo "  cp /usr/local/bin/curl java-app/curl"
+          cp /usr/local/bin/curl java-app/curl
+          echo "  OK: curl staged ($(du -sh java-app/curl | cut -f1))"
+
+          echo ""
+          echo "=== Offline build caches ready ==="
+
+      - name: Build and push Java echo service
+        run: |
+          IMAGE="${{ secrets.GIT_REGISTRY }}/${REPO_LOWER}/echo-service"
+          if [ "${BUILD_MODE}" = "online" ]; then
+            echo "=== Building java echo service (online — Dockerfile.online, deps from Maven Central) ==="
+            cat java-app/Dockerfile.online
+            docker build --no-cache \
+              -t ${IMAGE}:latest -t ${IMAGE}:${{ gitea.sha }} \
+              -f java-app/Dockerfile.online java-app
+          else
+            echo "=== Build context contents ==="
+            echo "  java-app/Dockerfile:"
+            cat java-app/Dockerfile
+            [ -d java-app/.m2 ] || { echo "  ERROR: java-app/.m2 is missing"; exit 1; }
+            [ -f java-app/curl ] || { echo "  ERROR: java-app/curl is missing"; exit 1; }
+            echo "  java-app/.m2 size: $(du -sh java-app/.m2 | cut -f1)"
+            echo "  java-app/.m2 sample:"
+            find java-app/.m2 -maxdepth 3 -type f | head -20 || true
+            echo "  java-app/curl: $(ls -lh java-app/curl)"
+            echo ""
+            echo "=== Building image (--network=none enforces offline) ==="
+            docker build --no-cache --network=none \
+              -t ${IMAGE}:latest -t ${IMAGE}:${{ gitea.sha }} \
+              -f java-app/Dockerfile java-app
+          fi
+          docker push ${IMAGE}:latest
+          docker push ${IMAGE}:${{ gitea.sha }}
+          echo "Pushed ${IMAGE}"
+
+      - name: Build and push Python load-test app
+        run: |
+          IMAGE="${{ secrets.GIT_REGISTRY }}/${REPO_LOWER}/load-test-app"
+          if [ "${BUILD_MODE}" = "online" ]; then
+            echo "=== Building python load-test app (online — Dockerfile.online, deps from PyPI/Debian) ==="
+            cat python-app/Dockerfile.online
+            docker build --no-cache -t ${IMAGE}:latest -t ${IMAGE}:${{ gitea.sha }} \
+              -f python-app/Dockerfile.online python-app
+          else
+            echo "=== Build context contents ==="
+            echo "  python-app/Dockerfile:"
+            cat python-app/Dockerfile
+            [ -d python-app/.wheelhouse ] || { echo "  ERROR: python-app/.wheelhouse is missing"; exit 1; }
+            [ -d python-app/.apt-debs ] || { echo "  ERROR: python-app/.apt-debs is missing"; exit 1; }
+            echo "  python-app/.wheelhouse files: $(find python-app/.wheelhouse -maxdepth 1 -type f | wc -l)"
+            echo "  python-app/.apt-debs packages: $(find python-app/.apt-debs -maxdepth 1 -type f -name '*.deb' | wc -l)"
+            echo "=== Building image (--network=none enforces offline) ==="
+            docker build --no-cache --network=none -t ${IMAGE}:latest -t ${IMAGE}:${{ gitea.sha }} \
+              -f python-app/Dockerfile python-app
+          fi
+          docker push ${IMAGE}:latest
+          docker push ${IMAGE}:${{ gitea.sha }}
+          echo "Pushed ${IMAGE}"
+
+      # ------------------------------------------------------------------
+      # Application SBOM must be ingested BEFORE the package SBOMs: it creates
+      # the application + build artifacts that package/CVE data correlates to.
+      - name: Generate and upload application SBOM (ConcertDef 1.0.2)
+        if: ${{ vars.CONCERT_URL != '' }}
+        continue-on-error: true
+        run: |
+          APP_NAME="${NAMESPACE}"
+          APP_VERSION="1.0.0"
+          GITEA_HOST=$(echo "${{ secrets.GIT_REGISTRY }}" | cut -d':' -f1)
+          GITEA_PORT=$(echo "${{ secrets.GIT_REGISTRY }}" | cut -d':' -f2)
+          # NOTE: Concert v2 rejects purl URLs of the form http://<IP>:<port>/...
+          # ("Invalid URL format") — use a hostname in GIT_REGISTRY for v2.
+          REPO_URL="http://${GITEA_HOST}:${GITEA_PORT}/${{ gitea.repository }}"
+          REG="${{ secrets.GIT_REGISTRY }}"
+          APP_SBOM="$WORKSPACE_DIR/application-sbom.json"
+
+          # ConcertDef 1.0.2 is strict (additionalProperties:false):
+          # containers allow only bom-ref/type/name; code only bom-ref/type/name/purl.
+          cat > "$APP_SBOM" <<EOF
+          {
+            "bomFormat": "ConcertDef",
+            "specVersion": "1.0.2",
+            "metadata": {
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+              "type": "application",
+              "component": { "name": "${APP_NAME}", "version": "${APP_VERSION}" },
+              "business": { "name": "TechExchange 2026" }
+            },
+            "components": [
+              {
+                "bom-ref": "build:${APP_NAME}",
+                "type": "build",
+                "name": "${APP_NAME}",
+                "version": "${APP_VERSION}",
+                "components": [
+                  { "bom-ref": "container:${APP_NAME}/echo-service",
+                    "type": "container", "name": "${REG}/${REPO_LOWER}/echo-service:latest" },
+                  { "bom-ref": "container:${APP_NAME}/load-test-app",
+                    "type": "container", "name": "${REG}/${REPO_LOWER}/load-test-app:latest" },
+                  { "bom-ref": "container:${APP_NAME}/juice-shop",
+                    "type": "container", "name": "bkimminich/juice-shop:latest" },
+                  { "bom-ref": "repository:coderepo:gitea:${APP_NAME}",
+                    "type": "code", "name": "${APP_NAME}", "purl": "${REPO_URL}" }
+                ]
+              }
+            ],
+            "properties": [ { "name": "application_criticality", "value": "3" } ]
+          }
+          EOF
+
+          capi() { curl -k -s --connect-timeout 10 --max-time 60 \
+                     -H "InstanceID: ${{ secrets.CONCERT_INSTANCE_ID }}" \
+                     -H "Authorization: C_API_KEY ${{ secrets.CONCERT_API_KEY }}" "$@"; }
+          app_exists() {
+            # v3 path first, then v2 (/concert prefix)
+            for p in /core/api/v1/applications /concert/core/api/v1/applications; do
+              capi "${{ vars.CONCERT_URL }}${p}?page_size=100" 2>/dev/null \
+                | grep -q "\"name\":\"${APP_NAME}\",[^{]*\"version\":\"${APP_VERSION}\"" && return 0
+            done
+            return 1
+          }
+
+          if app_exists; then
+            # Re-uploading an existing app+version fails ingestion
+            # ("Failed to bulk insert the application and component element relations")
+            echo "App ${APP_NAME} ${APP_VERSION} already in Concert - skipping upload"
+          else
+            HTTP_CODE=$(capi -w "%{http_code}" -o /tmp/concert-app-sbom.json \
+              -X POST "${{ vars.CONCERT_URL }}/ingestion/api/v1/upload_files" \
+              -F "data_type=application_sbom" \
+              -F "filename=@${APP_SBOM}")
+            echo "Concert application_sbom upload HTTP: ${HTTP_CODE} (202 = queued, check event log)"
+            echo "Waiting for application to be ingested (package SBOMs need it) ..."
+            for i in $(seq 1 20); do
+              app_exists && { echo "Application ingested."; break; }
+              sleep 10
+            done
+            app_exists || echo "WARN: app not visible yet - package SBOM correlation may fail"
+          fi
+          echo "APP_NAME=${APP_NAME}"       >> $GITHUB_ENV
+          echo "APP_VERSION=${APP_VERSION}" >> $GITHUB_ENV
+
+      # ------------------------------------------------------------------
+      - name: Generate SBOMs (Trivy, CycloneDX)
+        continue-on-error: true
+        run: |
+          echo "============================================"
+          echo "SBOM generation for all built images"
+          echo "============================================"
+          OUTDIR="$WORKSPACE_DIR/sboms"
+          mkdir -p "$OUTDIR"
+          IMAGES="${{ secrets.GIT_REGISTRY }}/${REPO_LOWER}/echo-service:latest ${{ secrets.GIT_REGISTRY }}/${REPO_LOWER}/load-test-app:latest bkimminich/juice-shop:latest"
+          echo "SBOM generation for images: $IMAGES"
+          for image in $IMAGES; do
+            safe=$(echo "$image" | tr '/:' '__')
+            echo ""
+            echo "--- SBOM: $image ---"
+            if [ -n "${TRIVY_BIN:-}" ]; then
+              "$TRIVY_BIN" image --cache-dir /var/lib/trivy-db --skip-db-update --skip-java-db-update --format cyclonedx --output "$OUTDIR/${safe}-sbom.json" "$image" || continue
+            else
+              docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+                -v "$OUTDIR:/output" -v /var/lib/trivy-db:/var/lib/trivy-db:ro \
+                aquasec/trivy:latest image --cache-dir /var/lib/trivy-db --skip-db-update --skip-java-db-update --format cyclonedx \
+                --output "/output/${safe}-sbom.json" "$image" || continue
+            fi
+            # Concert accepts CycloneDX 1.4-1.6 only; trivy >=0.6x emits 1.7.
+            python3 -c 'import json,sys; f=sys.argv[1]; d=json.load(open(f)); (d.get("specVersion")=="1.7") and (d.update({"specVersion":"1.6"}), d.pop("$schema",None), json.dump(d,open(f,"w"),indent=1), print("  downgraded CycloneDX 1.7 -> 1.6"))' "$OUTDIR/${safe}-sbom.json"
+            ls -lh "$OUTDIR/${safe}-sbom.json"
+
+            if [ -n "${{ vars.CONCERT_URL }}" ]; then
+              # metadata links the packages to the application created above
+              HTTP_CODE=$(curl -k -s -w "%{http_code}" -o /tmp/concert-sbom.json \
+                -X POST "${{ vars.CONCERT_URL }}/ingestion/api/v1/upload_files" \
+                -H "accept: application/json" \
+                -H "InstanceID: ${{ secrets.CONCERT_INSTANCE_ID }}" \
+                -H "Authorization: C_API_KEY ${{ secrets.CONCERT_API_KEY }}" \
+                -F "data_type=package_sbom" \
+                -F "metadata={\"application_name\":\"${APP_NAME}\",\"application_version\":\"${APP_VERSION}\"}" \
+                -F "filename=@$OUTDIR/${safe}-sbom.json" \
+                --connect-timeout 10 --max-time 120)
+              echo "Uploading SBOM file: ${safe}-sbom.json"
+              echo "Concert package_sbom upload HTTP: $HTTP_CODE"
+            fi
+          done
+
+      # ------------------------------------------------------------------
+      - name: Vulnerability scan (Trivy)
+        continue-on-error: true
+        run: |
+          echo "============================================"
+          echo "Image vulnerability scan for all built images"
+          echo "============================================"
+          OUTDIR="$WORKSPACE_DIR/vuln-scans"
+          mkdir -p "$OUTDIR"
+          IMAGES="${{ secrets.GIT_REGISTRY }}/${REPO_LOWER}/echo-service:latest ${{ secrets.GIT_REGISTRY }}/${REPO_LOWER}/load-test-app:latest bkimminich/juice-shop:latest"
+
+          # Air-gap flags: trivy binary pre-installed by load.sh; DB pre-seeded.
+          TRIVY_FLAGS="--skip-db-update --skip-java-db-update"
+
+          for image in $IMAGES; do
+            safe=$(echo "$image" | tr '/:' '__')
+            echo ""
+            echo "--- Scan: $image ---"
+            if [ -n "${TRIVY_BIN:-}" ]; then
+              # Human-readable summary in the build log for students
+              "$TRIVY_BIN" image --cache-dir /var/lib/trivy-db --skip-db-update --skip-java-db-update --scanners vuln --severity HIGH,CRITICAL --format table "$image" || true
+              "$TRIVY_BIN" image --cache-dir /var/lib/trivy-db --skip-db-update --skip-java-db-update --scanners vuln --format cyclonedx --output "$OUTDIR/${safe}-scan.json" "$image" || continue
+            else
+              docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+                -v /var/lib/trivy-db:/var/lib/trivy-db:ro \
+                aquasec/trivy:latest image --cache-dir /var/lib/trivy-db --skip-db-update --skip-java-db-update --scanners vuln --severity HIGH,CRITICAL --format table "$image" || true
+              docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+                -v "$OUTDIR:/output" -v /var/lib/trivy-db:/var/lib/trivy-db:ro \
+                aquasec/trivy:latest image --cache-dir /var/lib/trivy-db --skip-db-update --skip-java-db-update --scanners vuln --format cyclonedx \
+                --output "/output/${safe}-scan.json" "$image" || continue
+            fi
+
+            # Concert accepts CycloneDX 1.4-1.6 only; trivy >=0.6x emits 1.7.
+            python3 -c 'import json,sys; f=sys.argv[1]; d=json.load(open(f)); (d.get("specVersion")=="1.7") and (d.update({"specVersion":"1.6"}), d.pop("$schema",None), json.dump(d,open(f,"w"),indent=1))' "$OUTDIR/${safe}-scan.json"
+
+            if [ -n "${{ vars.CONCERT_URL }}" ]; then
+              # image_scan metadata must be ONLY scanner_name (adding
+              # application_name breaks Concert's correlation for scans)
+              HTTP_CODE=$(curl -k -s -w "%{http_code}" -o /tmp/concert-scan.json \
+                -X POST "${{ vars.CONCERT_URL }}/ingestion/api/v1/upload_files" \
+                -H "accept: application/json" \
+                -H "InstanceID: ${{ secrets.CONCERT_INSTANCE_ID }}" \
+                -H "Authorization: C_API_KEY ${{ secrets.CONCERT_API_KEY }}" \
+                -F "data_type=image_scan" \
+                -F "filename=@$OUTDIR/${safe}-scan.json" \
+                -F 'metadata={"scanner_name":"Trivy"}' \
+                --connect-timeout 10 --max-time 120)
+              echo "Concert image_scan upload HTTP: $HTTP_CODE"
+            fi
+          done
+
+      # (The application SBOM is now generated + uploaded earlier — see the
+      #  "Generate and upload application SBOM" step — so it lands before the
+      #  package/CVE data that correlates to it. The old step that uploaded the
+      #  static concert-sbom/*.json here has been removed.)
+
+      # ------------------------------------------------------------------
+      - name: Setup kubeconfig
+        run: |
+          mkdir -p $HOME/.kube
+          if echo "${{ secrets.KUBECONFIG }}" | base64 -d > /dev/null 2>&1; then
+            echo "${{ secrets.KUBECONFIG }}" | base64 -d > $HOME/.kube/config
+          else
+            echo "${{ secrets.KUBECONFIG }}" > $HOME/.kube/config
+          fi
+          chmod 600 $HOME/.kube/config
+          "$KUBECTL_BIN" get ns "$NAMESPACE" || echo "Note: namespace-scoped kubeconfigs cannot list namespaces - continuing"
+          echo "kubeconfig ready"
+
+      # ------------------------------------------------------------------
+      - name: Deploy application
+        run: |
+          echo "Deploying into namespace ${NAMESPACE} ..."
+          subst() { sed -e "s|\${NAMESPACE}|${NAMESPACE}|g" \
+                        -e "s|\${INGRESS_HOST}|${INGRESS_HOST}|g" \
+                        -e "s|\${IMAGE_REGISTRY}|${{ secrets.GIT_REGISTRY }}|g" \
+                        -e "s|\${IMAGE_TAG}|${{ gitea.sha }}|g" "$1"; }
+
+          # Namespace-level objects (SA, Role, demo secret). The namespace itself
+          # already exists (created by the instructor's provisioning script); a
+          # namespace-scoped kubeconfig may not create namespaces.
+          subst $WORKSPACE_DIR/k8s/namespace.yaml | "$KUBECTL_BIN" apply -f - || true
+          subst $WORKSPACE_DIR/k8s/configmaps.yaml | "$KUBECTL_BIN" apply -f -
+
+          # Echo service
+          subst $WORKSPACE_DIR/k8s/echo-service-deployment.yaml \
+            | sed -e "s|\${IMAGE_REPOSITORY}|${REPO_LOWER}/echo-service|g" | "$KUBECTL_BIN" apply -f -
+
+          # Load-test app
+          subst $WORKSPACE_DIR/k8s/python-app-deployment.yaml \
+            | sed -e "s|\${IMAGE_REPOSITORY}|${REPO_LOWER}/load-test-app|g" | "$KUBECTL_BIN" apply -f -
+
+          # Juice Shop
+          subst $WORKSPACE_DIR/k8s/juice-shop-deployment.yaml | "$KUBECTL_BIN" apply -f -
+
+          "$KUBECTL_BIN" rollout status deployment/vulnerable-echo-service -n ${NAMESPACE} --timeout=5m
+          "$KUBECTL_BIN" rollout status deployment/load-test-app -n ${NAMESPACE} --timeout=5m
+          "$KUBECTL_BIN" rollout status deployment/juice-shop -n ${NAMESPACE} --timeout=3m || true
+
+      # ------------------------------------------------------------------
+      - name: TLS certificate and ingress
+        run: |
+          if ! "$KUBECTL_BIN" get secret ${NAMESPACE}-tls -n ${NAMESPACE} &> /dev/null; then
+            openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+              -keyout /tmp/tls.key -out /tmp/tls.crt \
+              -subj "/CN=${INGRESS_HOST}/O=TechExchange2026" 2>/dev/null
+            "$KUBECTL_BIN" create secret tls ${NAMESPACE}-tls \
+              --cert=/tmp/tls.crt --key=/tmp/tls.key -n ${NAMESPACE}
+            rm -f /tmp/tls.key /tmp/tls.crt
+          fi
+
+          sed -e "s|\${NAMESPACE}|${NAMESPACE}|g" \
+              -e "s|\${INGRESS_HOST}|${INGRESS_HOST}|g" \
+              $WORKSPACE_DIR/k8s/ingress.yaml | "$KUBECTL_BIN" apply -f -
+          echo "Ingress deployed for host ${INGRESS_HOST}"
+
+      # ------------------------------------------------------------------
+      - name: Deployment summary
+        run: |
+          echo "==================================="
+          echo "Deployment summary for ${NAMESPACE}"
+          echo "==================================="
+          "$KUBECTL_BIN" get deployments,pods,services,ingress -n ${NAMESPACE}
+          echo ""
+          echo "Access URLs:"
+          echo "  http://${INGRESS_HOST}          (load-test app UI)"
+          echo "  http://${INGRESS_HOST}/echo-service/api/echo  (vulnerable echo service)"
+          echo ""
+          echo "Images built and pushed:"
+          echo "  ${{ secrets.GIT_REGISTRY }}/${REPO_LOWER}/echo-service:latest"
+          echo "  ${{ secrets.GIT_REGISTRY }}/${REPO_LOWER}/load-test-app:latest"

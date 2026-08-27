@@ -1,0 +1,116 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ${NAMESPACE}-ingress
+  namespace: ${NAMESPACE}
+  labels:
+    app: ${NAMESPACE}
+    component: routing
+  annotations:
+    # Accept both HTTP and HTTPS traffic
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    
+    # Nginx compatibility
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+spec:
+  ingressClassName: traefik
+  tls:
+  - hosts:
+    - ${INGRESS_HOST}
+    secretName: ${NAMESPACE}-tls
+  rules:
+  - host: ${INGRESS_HOST}
+    http:
+      paths:
+      # Load Test App routes
+      - path: /stress
+        pathType: Exact
+        backend:
+          service:
+            name: load-test-service
+            port:
+              number: 80
+      - path: /echo
+        pathType: Exact
+        backend:
+          service:
+            name: load-test-service
+            port:
+              number: 80
+      - path: /stop
+        pathType: Prefix
+        backend:
+          service:
+            name: load-test-service
+            port:
+              number: 80
+      - path: /ramp
+        pathType: Exact
+        backend:
+          service:
+            name: load-test-service
+            port:
+              number: 80
+      - path: /wave
+        pathType: Exact
+        backend:
+          service:
+            name: load-test-service
+            port:
+              number: 80
+      - path: /flood
+        pathType: Exact
+        backend:
+          service:
+            name: load-test-service
+            port:
+              number: 80
+      - path: /health
+        pathType: Exact
+        backend:
+          service:
+            name: load-test-service
+            port:
+              number: 80
+      - path: /metrics
+        pathType: Exact
+        backend:
+          service:
+            name: load-test-service
+            port:
+              number: 80
+      - path: /status
+        pathType: Exact
+        backend:
+          service:
+            name: load-test-service
+            port:
+              number: 80
+      # Load Test App API routes
+      - path: /api/
+        pathType: Prefix
+        backend:
+          service:
+            name: load-test-service
+            port:
+              number: 80
+      # Echo Service direct access
+      - path: /echo-service
+        pathType: Prefix
+        backend:
+          service:
+            name: vulnerable-echo-service
+            port:
+              number: 8085
+      # Default - Load Test App
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: load-test-service
+            port:
+              number: 80

@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 
+WARNUNG: Diese Log4j2 Konfiguration ist absichtlich VULNERABLE (CVE-2021-44228)
+NUR für Testing/Demonstration in isolierten Umgebungen verwenden!
+-->
+<Configuration status="INFO">
+    <Properties>
+        <!-- VULNERABLE: JNDI Lookups sind aktiviert -->
+        <Property name="LOG_PATTERN">%d{yyyy-MM-dd HH:mm:ss.SSS} [%t] %-5level %logger{36} - %msg%n</Property>
+        <Property name="LOG_LEVEL">INFO</Property>
+    </Properties>
+    
+    <Appenders>
+        <!-- Console Appender -->
+        <Console name="Console" target="SYSTEM_OUT">
+            <PatternLayout pattern="${LOG_PATTERN}"/>
+        </Console>
+        
+        <!-- File Appender für Application Logs -->
+        <File name="FileAppender" fileName="/app/logs/vulnerable-echo-service.log">
+            <PatternLayout pattern="${LOG_PATTERN}"/>
+        </File>
+        
+        <!-- Rolling File Appender für Request Logs -->
+        <RollingFile name="RequestLog" 
+                     fileName="/app/logs/requests.log"
+                     filePattern="/app/logs/requests-%d{yyyy-MM-dd}-%i.log.gz">
+            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} - REQUEST: %msg%n"/>
+            <Policies>
+                <TimeBasedTriggeringPolicy />
+                <SizeBasedTriggeringPolicy size="50MB"/>
+            </Policies>
+            <DefaultRolloverStrategy max="10"/>
+        </RollingFile>
+        
+        <!-- VULNERABLE: Network Appender für Demo -->
+        <Socket name="SocketAppender" host="localhost" port="9999" protocol="TCP">
+            <PatternLayout pattern="${LOG_PATTERN}"/>
+        </Socket>
+    </Appenders>
+    
+    <Loggers>
+        <!-- Application Logger -->
+        <Logger name="com.loadtest.vulnerable" level="${LOG_LEVEL}" additivity="false">
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="FileAppender"/>
+            <AppenderRef ref="RequestLog"/>
+        </Logger>
+        
+        <!-- Spring Boot Loggers -->
+        <Logger name="org.springframework" level="INFO" additivity="false">
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="FileAppender"/>
+        </Logger>
+        
+        <!-- HTTP Request Logging -->
+        <Logger name="org.apache.coyote.http11" level="INFO" additivity="false">
+            <AppenderRef ref="RequestLog"/>
+        </Logger>
+        
+        <!-- Root Logger -->
+        <Root level="${LOG_LEVEL}">
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="FileAppender"/>
+        </Root>
+    </Loggers>
+</Configuration>

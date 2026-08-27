@@ -1,0 +1,9 @@
+# NOTE: versions are DELIBERATELY OUTDATED so the Trivy scan finds real CVEs
+# and IBM Concert can raise them. Remediation exercise = bump these to current,
+# rebuild, and confirm the re-scan is clean.
+#   Flask 0.12.2   -> CVE-2018-1000656, CVE-2019-1010083 (and pulls old Werkzeug/Jinja2)
+#   urllib3 1.24.1 -> CVE-2019-11324, CVE-2019-11236, CVE-2020-26137
+#   requests 2.20.0 (compatible with the pinned urllib3)
+Flask==0.12.2
+urllib3==1.24.1
+requests==2.20.0

@@ -1,0 +1,62 @@
+# recommendations — student-built add-on for mini Robot Shop.
+# In the workshop the image comes from the student's pipeline:
+#   ${GIT_REGISTRY}/${student-repo}/recommendations:latest
+# The placeholder below is fine for a local/instructor test build.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recommendations
+  namespace: robot-shop-demo
+  labels:
+    service: recommendations
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      service: recommendations
+  template:
+    metadata:
+      labels:
+        service: recommendations
+    spec:
+      containers:
+      - name: recommendations
+        image: recommendations:latest   # <-- replace with your pipeline image
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: INSTANA_AGENT_HOST
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        - name: CATALOGUE_URL
+          value: "http://catalogue:8080"
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m       # low limit -> can also become a Turbonomic scale target
+            memory: 128Mi
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: recommendations
+  namespace: robot-shop-demo
+  labels:
+    service: recommendations
+spec:
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+  selector:
+    service: recommendations

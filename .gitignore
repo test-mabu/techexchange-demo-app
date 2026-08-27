@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+.wheelhouse/
+.apt-debs/
+
+# Java / Maven
+target/
+*.class
+.m2/
+
+# Build-context staging (populated at build time from the air-gap bundle)
+java-app/.m2/
+java-app/curl
+python-app/.wheelhouse/
+python-app/.apt-debs/
+
+# SBOM / scan outputs
+sboms/
+vuln-scans/
+*-sbom.json
+*-scan.json
+application-sbom.json
+
+# OS / editor
+.DS_Store
+*.swp

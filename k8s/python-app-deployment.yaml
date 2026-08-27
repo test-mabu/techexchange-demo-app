@@ -1,0 +1,175 @@
+# Deployment for Load Test App
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: load-test-app
+  namespace: ${NAMESPACE}
+  labels:
+    app: load-test-app
+    version: v3.2.0
+    component: frontend
+    tier: web
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: load-test-app
+  template:
+    metadata:
+      labels:
+        app: load-test-app
+        version: v3.2.0
+        component: frontend
+        tier: web
+        instana-autotrace: "true"
+      annotations:
+        instana.io/monitored: "true"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+        seccomp.security.alpha.kubernetes.io/pod: runtime/default
+        kubectl.kubernetes.io/default-container: load-test-app
+    spec:
+      serviceAccountName: ${NAMESPACE}-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+      - name: load-test-app
+        image: ${IMAGE_REGISTRY}/${IMAGE_REPOSITORY}:${IMAGE_TAG}
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: load-test-config
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: ECHO_SERVICE_URL
+          value: "http://vulnerable-echo-service:8085"
+        - name: JUICE_SHOP_URL
+          value: "http://juice-shop-service"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+            ephemeral-storage: "1Gi"
+          limits:
+            memory: "512Mi"
+            cpu: "250m"
+            ephemeral-storage: "2Gi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+          successThreshold: 1
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+          successThreshold: 1
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 10
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - NET_BIND_SERVICE
+            - SYS_RESOURCE
+        volumeMounts:
+        - name: tmp-volume
+          mountPath: /tmp
+        - name: cache-volume
+          mountPath: /app/cache
+      volumes:
+      - name: tmp-volume
+        emptyDir: {}
+      - name: cache-volume
+        emptyDir: {}
+      nodeSelector:
+        kubernetes.io/os: linux
+
+---
+# ClusterIP Service for Load Test App
+apiVersion: v1
+kind: Service
+metadata:
+  name: load-test-service
+  namespace: ${NAMESPACE}
+  labels:
+    app: load-test-app
+    component: frontend
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: load-test-app
+
+---
+# NodePort Service for external access
+apiVersion: v1
+kind: Service
+metadata:
+  name: load-test-loadbalancer
+  namespace: ${NAMESPACE}
+  labels:
+    app: load-test-app
+    service-type: nodeport
+spec:
+  type: NodePort
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: load-test-app

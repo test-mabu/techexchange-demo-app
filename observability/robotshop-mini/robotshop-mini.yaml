@@ -1,0 +1,262 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: robot-shop-demo
+  labels:
+    name: robot-shop-demo
+    app.kubernetes.io/part-of: techexchange2026-observability
+---
+# ---------------- MongoDB (catalogue data, pre-seeded) ----------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb
+  namespace: robot-shop-demo
+  labels:
+    service: mongodb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      service: mongodb
+  template:
+    metadata:
+      labels:
+        service: mongodb
+    spec:
+      containers:
+      - name: mongodb
+        image: robotshop/rs-mongodb:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 27017
+        resources:
+          requests:
+            cpu: 100m
+            memory: 100Mi
+          limits:
+            cpu: 300m
+            memory: 300Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb
+  namespace: robot-shop-demo
+  labels:
+    service: mongodb
+spec:
+  ports:
+  - name: mongo
+    port: 27017
+    targetPort: 27017
+  selector:
+    service: mongodb
+---
+# ---------------- Catalogue (Node.js) — the horizontal-scale target ----------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalogue
+  namespace: robot-shop-demo
+  labels:
+    service: catalogue
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      service: catalogue
+  template:
+    metadata:
+      labels:
+        service: catalogue
+      annotations:
+        # Built-in @instana/collector handles tracing via the host agent;
+        # opt this pod out of AutoTrace to avoid double instrumentation.
+        instana-autotrace: "false"
+    spec:
+      containers:
+      - name: catalogue
+        image: robotshop/rs-catalogue:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: INSTANA_AGENT_HOST
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        ports:
+        - containerPort: 8080
+        # VALIDATED on 3-node cluster @ 192.168.178.35 (90 Locust users):
+        # CPU pinned at 200m limit (fully throttled) => p50 ~310ms, 0 restarts.
+        # CPU is the deliberate bottleneck; memory 256Mi is headroom to avoid
+        # OOMKill (100Mi OOM-killed Node.js+Instana collector under load).
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 200m            # the bottleneck -> drives response-time SLO breach
+            memory: 256Mi        # headroom: prevents OOMKill so Turbo can scale, not crashloop
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          # Forgiving: a CPU-throttled-but-alive pod must NOT be killed, so Turbo
+          # sees a scalable bottleneck rather than a crashloop.
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 20
+          periodSeconds: 20
+          timeoutSeconds: 5
+          failureThreshold: 6
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalogue
+  namespace: robot-shop-demo
+  labels:
+    service: catalogue
+spec:
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+  selector:
+    service: catalogue
+---
+# ---------------- Web (nginx frontend / entrypoint) ----------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: robot-shop-demo
+  labels:
+    service: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      service: web
+  template:
+    metadata:
+      labels:
+        service: web
+    spec:
+      containers:
+      - name: web
+        image: robotshop/rs-web:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            cpu: 50m
+            memory: 32Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: robot-shop-demo
+  labels:
+    service: web
+spec:
+  type: LoadBalancer
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+  selector:
+    service: web
+---
+# ---------------- Trimmed Locust load generator (catalogue routes only) ----------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: load-gen-locustfile
+  namespace: robot-shop-demo
+data:
+  locustfile.py: |
+    import random
+    from locust import HttpUser, task, between
+
+    class CatalogueUser(HttpUser):
+        # Aggressive think time -> steady pressure on catalogue
+        wait_time = between(0.05, 0.3)
+
+        @task(6)
+        def list_products(self):
+            self.client.get("/api/catalogue/products")
+
+        @task(3)
+        def categories(self):
+            self.client.get("/api/catalogue/categories")
+
+        @task(5)
+        def product_detail(self):
+            r = self.client.get("/api/catalogue/products")
+            try:
+                items = r.json()
+                if items:
+                    sku = random.choice(items).get("sku")
+                    if sku:
+                        self.client.get(f"/api/catalogue/product/{sku}",
+                                        name="/api/catalogue/product/[sku]")
+            except Exception:
+                pass
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: load-gen
+  namespace: robot-shop-demo
+  labels:
+    service: load-gen
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      service: load-gen
+  template:
+    metadata:
+      labels:
+        service: load-gen
+      annotations:
+        instana-autotrace: "false"
+    spec:
+      containers:
+      - name: load-gen
+        image: locustio/locust:2.31.8
+        imagePullPolicy: IfNotPresent
+        args:
+        - -f
+        - /locust/locustfile.py
+        - --headless
+        - --host
+        - http://web:8080
+        - -u
+        - "90"          # VALIDATED: pins catalogue at 200m, p50 ~310ms, ~188 rps, no OOM
+        - -r
+        - "5"           # spawn rate/s   (45=mild ~150ms p50; 150+=too hot, catalogue OOM/probe risk)
+        volumeMounts:
+        - name: locustfile
+          mountPath: /locust
+        resources:
+          requests:
+            cpu: 100m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+      volumes:
+      - name: locustfile
+        configMap:
+          name: load-gen-locustfile
