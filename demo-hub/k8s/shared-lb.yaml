@@ -1,0 +1,56 @@
+# One shared metallb IP (192.168.178.216); each app on its own port. No DNS/hosts needed.
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-hub-lb
+  namespace: load-testing
+  labels: {app: demo-hub}
+  annotations:
+    metallb.universe.tf/loadBalancerIPs: "192.168.178.216"
+    metallb.universe.tf/allow-shared-ip: "demo-stack"
+spec:
+  type: LoadBalancer
+  ports: [{name: http, port: 80, targetPort: 80}]
+  selector: {app: demo-hub}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: load-test-lb
+  namespace: load-testing
+  labels: {app: load-test-app}
+  annotations:
+    metallb.universe.tf/loadBalancerIPs: "192.168.178.216"
+    metallb.universe.tf/allow-shared-ip: "demo-stack"
+spec:
+  type: LoadBalancer
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+  selector: {app: load-test-app}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: juice-shop-lb
+  namespace: load-testing
+  labels: {app: juice-shop}
+  annotations:
+    metallb.universe.tf/loadBalancerIPs: "192.168.178.216"
+    metallb.universe.tf/allow-shared-ip: "demo-stack"
+spec:
+  type: LoadBalancer
+  ports: [{name: http, port: 3000, targetPort: 3000}]
+  selector: {app: juice-shop}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo-lb
+  namespace: load-testing
+  labels: {app: vulnerable-echo-service}
+  annotations:
+    metallb.universe.tf/loadBalancerIPs: "192.168.178.216"
+    metallb.universe.tf/allow-shared-ip: "demo-stack"
+spec:
+  type: LoadBalancer
+  ports: [{name: http, port: 8085, targetPort: 8085}]
+  selector: {app: vulnerable-echo-service}

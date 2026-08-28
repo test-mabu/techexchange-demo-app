@@ -1,0 +1,59 @@
+# Demo Hub landing page ("own frontend") — single entry point for the demo.
+# The HTML lives in demo-hub/index.html and is mounted via a ConfigMap:
+#   kubectl -n load-testing create configmap demo-hub-html \
+#     --from-file=index.html=demo-hub/index.html \
+#     --dry-run=client -o yaml | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-hub
+  namespace: load-testing
+  labels: {app: demo-hub, component: frontend}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: demo-hub}}
+  template:
+    metadata:
+      labels: {app: demo-hub}
+      annotations: {instana.io/monitored: "true"}
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.27-alpine
+        ports: [{containerPort: 80, name: http}]
+        volumeMounts:
+        - {name: html, mountPath: /usr/share/nginx/html}
+        resources:
+          requests: {memory: "32Mi", cpu: "10m"}
+          limits: {memory: "64Mi", cpu: "50m"}
+        readinessProbe: {httpGet: {path: /, port: 80}, initialDelaySeconds: 3, periodSeconds: 5}
+      volumes:
+      - name: html
+        configMap: {name: demo-hub-html}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-hub-service
+  namespace: load-testing
+  labels: {app: demo-hub}
+spec:
+  type: ClusterIP
+  ports: [{port: 80, targetPort: 80, name: http}]
+  selector: {app: demo-hub}
+---
+# Optional: serve the hub on the nginx ingress too (bare IP, no Host header).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: demo-hub-ingress
+  namespace: load-testing
+  labels: {app: demo-hub, component: routing}
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      - {path: /, pathType: Prefix, backend: {service: {name: demo-hub-service, port: {number: 80}}}}

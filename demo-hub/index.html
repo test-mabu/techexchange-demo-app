@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIOps Demo Hub</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;
+       background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);
+       color:#e0e0e0;min-height:100vh;padding:40px 20px}
+  .wrap{max-width:1080px;margin:0 auto}
+  header{text-align:center;margin-bottom:40px}
+  header h1{font-size:2.4em;color:#00d2ff;text-shadow:0 0 22px rgba(0,210,255,.3)}
+  header p{color:#8899a6;margin-top:10px;font-size:1.05em}
+  .badge{display:inline-block;margin-top:14px;padding:4px 14px;border-radius:20px;
+         background:rgba(0,210,255,.1);border:1px solid rgba(0,210,255,.25);
+         color:#00d2ff;font-size:.8em;font-family:monospace}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:22px}
+  .card{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);
+        border-radius:14px;padding:26px;backdrop-filter:blur(10px);
+        display:flex;flex-direction:column;transition:transform .15s,border-color .15s}
+  .card:hover{transform:translateY(-4px);border-color:rgba(0,210,255,.4)}
+  .icon{font-size:2.2em;margin-bottom:12px}
+  .card h2{font-size:1.25em;color:#00d2ff;margin-bottom:10px}
+  .card .tag{display:inline-block;padding:2px 10px;border-radius:12px;font-size:.72em;
+             font-weight:600;text-transform:uppercase;margin-bottom:12px}
+  .t-load{background:#9b59b633;color:#c39bd3}
+  .t-vuln{background:#e74c3c33;color:#e74c3c}
+  .t-log4j{background:#f39c1233;color:#f39c12}
+  .card p{color:#aab4be;font-size:.92em;line-height:1.5;flex-grow:1}
+  .card a.btn{display:inline-block;margin-top:18px;text-align:center;padding:11px 20px;
+              border-radius:8px;font-weight:600;text-decoration:none;
+              background:linear-gradient(135deg,#00d2ff,#0083b0);color:#fff;transition:filter .15s}
+  .card a.btn:hover{filter:brightness(1.15)}
+  .card code{background:rgba(0,0,0,.35);padding:2px 7px;border-radius:5px;
+             font-size:.85em;color:#7fe3ff}
+  footer{margin-top:40px;text-align:center;color:#5c6d7e;font-size:.85em;line-height:1.6}
+  footer .warn{color:#e08a8a}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>&#9889; AIOps Demo Hub</h1>
+    <p>One entry point for the Instana &middot; Turbonomic &middot; Concert demo stack</p>
+    <div class="badge" id="entry">single entry IP</div>
+  </header>
+
+  <div class="grid">
+
+    <div class="card">
+      <div class="icon">&#128293;</div>
+      <span class="tag t-load">System Load</span>
+      <h2>Load Generator</h2>
+      <p>Drive CPU, memory and network load with constant, ramp and sine-wave
+         patterns via <code>stress-ng</code>. Live per-pod and cluster-wide
+         metrics &mdash; the pressure Turbonomic reacts to and Instana charts.</p>
+      <a class="btn" data-port="8080" data-path="/">Open Load Generator</a>
+    </div>
+
+    <div class="card">
+      <div class="icon">&#129530;</div>
+      <span class="tag t-vuln">Vulnerable Store</span>
+      <h2>Juice Shop</h2>
+      <p>A real, browsable OWASP Juice Shop storefront &mdash; products, search,
+         login, basket. Intentionally insecure (SQLi, XSS, IDOR), so every click
+         is real telemetry and a DAST / Concert finding.</p>
+      <a class="btn" data-port="3000" data-path="/">Open the Shop</a>
+    </div>
+
+    <div class="card">
+      <div class="icon">&#128225;</div>
+      <span class="tag t-log4j">Log4Shell</span>
+      <h2>Echo Service</h2>
+      <p>Spring Boot echo service running <code>Log4j 2.14.1</code>
+         (<code>CVE-2021-44228</code>). Send a JNDI payload from the Load
+         Generator's <b>Echo</b> tab to light up the vulnerability in Instana.</p>
+      <a class="btn" data-port="8085" data-path="/">Open Echo Service</a>
+    </div>
+
+  </div>
+
+  <footer>
+    <p>Namespace <code style="background:rgba(0,0,0,.35);padding:1px 6px;border-radius:4px">load-testing</code>
+       &middot; routed through the nginx ingress on a single IP.</p>
+    <p class="warn">&#9888; Lab use only &mdash; contains intentionally vulnerable software.</p>
+  </footer>
+</div>
+<script>
+  // Build cross-port links from whatever host/IP this page was opened on —
+  // no DNS or hosts-file entries needed; everything lives on one IP.
+  var host = location.hostname;
+  document.getElementById('entry').textContent = 'single entry IP → ' + host;
+  document.querySelectorAll('a.btn[data-port]').forEach(function(a){
+    a.href = 'http://' + host + ':' + a.dataset.port + a.dataset.path;
+  });
+</script>
+</body>
+</html>
