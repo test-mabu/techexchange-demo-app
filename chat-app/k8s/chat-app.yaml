@@ -1,0 +1,113 @@
+# Configurable LLM chat app + Traceloop(OpenLLMetry) -> Instana tracing.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chat-config
+  namespace: load-testing
+data:
+  # ---- LLM backend (OpenAI-compatible for all three) ----
+  # Default: Ollama on the Mac over the LAN.
+  LLM_PROVIDER: "ollama"
+  LLM_BASE_URL: "http://192.168.178.124:11434/v1"
+  LLM_MODEL: "granite3.3:8b"
+  #
+  # -- vLLM preset (set these three, and LLM_API_KEY in the secret if required):
+  #   LLM_PROVIDER: "vllm"
+  #   LLM_BASE_URL: "http://<vllm-host>:8000/v1"
+  #   LLM_MODEL:    "<served-model-name>"
+  #
+  # -- OpenAI preset:
+  #   LLM_PROVIDER: "openai"
+  #   LLM_BASE_URL: "https://api.openai.com/v1"
+  #   LLM_MODEL:    "gpt-4o-mini"
+  #   (put the real key in the chat-secrets Secret below)
+  #
+  SYSTEM_PROMPT: "You are a helpful assistant for an IBM AIOps demo. Keep answers concise."
+  LLM_TIMEOUT: "120"
+  # ---- Tracing -> Instana agent (OTLP/HTTP) ----
+  TRACING_ENABLED: "true"
+  # Traceloop posts OTLP/HTTP to <base>/v1/traces. Instana agent OTLP HTTP = 4318.
+  TRACELOOP_BASE_URL: "http://instana-agent.instana-agent:4318"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "instana-agent.instana-agent:4318"
+  TRACELOOP_APP_NAME: "chat-app"
+  TRACELOOP_TELEMETRY: "false"            # disable Traceloop's own phone-home
+  OTEL_SERVICE_NAME: "chat-app"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: chat-secrets
+  namespace: load-testing
+type: Opaque
+stringData:
+  # Dummy for Ollama/vLLM; put your real OpenAI key here when using OpenAI.
+  LLM_API_KEY: "ollama"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chat-app
+  namespace: load-testing
+  labels: {app: chat-app, component: ai, tier: web}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: chat-app}}
+  template:
+    metadata:
+      labels: {app: chat-app, component: ai, tier: web}
+      annotations:
+        instana.io/monitored: "true"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        # Opt out of Instana AutoTrace injection: its process-start OTel provider
+        # collides with Traceloop. Traceloop still exports OTLP to the Instana agent.
+        instana-autotrace: "false"
+    spec:
+      containers:
+      - name: chat-app
+        image: docker.io/mbx1010/chat-app:2.0
+        imagePullPolicy: Always
+        # Instana AutoTrace injects a Python sitecustomize via PYTHONPATH (and
+        # LD_PRELOAD), setting up an OTel provider at interpreter start that
+        # collides with Traceloop. Strip them so Python starts clean; Traceloop
+        # still exports OTLP to the Instana agent.
+        command: ["/bin/sh", "-c"]
+        args: ["unset LD_PRELOAD NODE_OPTIONS PYTHONPATH; exec python /app/app.py"]
+        ports: [{containerPort: 8080, name: http}]
+        envFrom:
+        - configMapRef: {name: chat-config}
+        - secretRef: {name: chat-secrets}
+        env:
+        - {name: POD_NAME,  valueFrom: {fieldRef: {fieldPath: metadata.name}}}
+        - {name: NODE_NAME, valueFrom: {fieldRef: {fieldPath: spec.nodeName}}}
+        resources:
+          requests: {memory: "128Mi", cpu: "50m"}
+          limits: {memory: "512Mi", cpu: "500m"}
+        readinessProbe: {httpGet: {path: /health, port: 8080}, initialDelaySeconds: 5, periodSeconds: 5}
+        livenessProbe:  {httpGet: {path: /health, port: 8080}, initialDelaySeconds: 20, periodSeconds: 15}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chat-service
+  namespace: load-testing
+  labels: {app: chat-app}
+spec:
+  type: ClusterIP
+  ports: [{port: 80, targetPort: 8080, name: http}]
+  selector: {app: chat-app}
+---
+# Shared single-entry IP (same as the rest of the demo), on its own port.
+apiVersion: v1
+kind: Service
+metadata:
+  name: chat-lb
+  namespace: load-testing
+  labels: {app: chat-app}
+  annotations:
+    metallb.universe.tf/loadBalancerIPs: "192.168.178.216"
+    metallb.universe.tf/allow-shared-ip: "demo-stack"
+spec:
+  type: LoadBalancer
+  ports: [{name: http, port: 8600, targetPort: 8080}]
+  selector: {app: chat-app}

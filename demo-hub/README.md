@@ -15,6 +15,7 @@ each component on its own port:
 | Load Generator (load-test-app)   | `8080` | CPU/mem/network load |
 | Juice Shop                        | `3000` | OWASP vulnerable storefront |
 | Echo Service                      | `8085` | Log4j CVE-2021-44228, web UI at `/` |
+| AI Chat (chat-app)                | `8600` | Configurable LLM chat + Traceloop→Instana tracing (see `../chat-app/`) |
 
 The hub's buttons are generated in-browser from `location.hostname`, so nothing
 is hard-coded — open the hub on whatever IP the LB has and the links follow.

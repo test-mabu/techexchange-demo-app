@@ -1,0 +1,20 @@
+# Online build: deps from PyPI. LLM chat app with Traceloop -> Instana tracing.
+FROM python:3.11-slim-bookworm AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends gcc g++ && rm -rf /var/lib/apt/lists/*
+COPY requirements.txt /tmp/
+RUN pip install --no-cache-dir --prefix=/install -r /tmp/requirements.txt
+
+FROM python:3.11-slim-bookworm
+LABEL maintainer="mbx1010" version="1.0" \
+      description="Configurable LLM chat (OpenAI/vLLM/Ollama) with Traceloop->Instana tracing"
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+RUN groupadd -r appuser && useradd -r -g appuser -u 1000 appuser
+WORKDIR /app
+COPY --from=builder /install /usr/local
+COPY --chown=appuser:appuser app.py /app/
+ENV PYTHONUNBUFFERED=1 PORT=8080 HOST=0.0.0.0
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:${PORT}/health || exit 1
+USER appuser
+EXPOSE 8080
+CMD ["python", "app.py"]

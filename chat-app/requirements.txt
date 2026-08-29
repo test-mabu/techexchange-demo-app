@@ -1,0 +1,11 @@
+Flask==3.0.3
+waitress==3.0.0
+openai==1.54.4
+# openai 1.54 passes proxies= to httpx, removed in httpx>=0.28 — pin below that.
+httpx==0.27.2
+# Traceloop / OpenLLMetry — auto-instruments the OpenAI SDK and exports OTLP.
+traceloop-sdk==0.33.12
+# OTLP exporters (both, so grpc or http can be selected at runtime).
+# Pinned to the OpenTelemetry line that traceloop-sdk 0.33.x requires (1.28.x).
+opentelemetry-exporter-otlp-proto-grpc>=1.28.0,<1.29.0
+opentelemetry-exporter-otlp-proto-http>=1.28.0,<1.29.0
