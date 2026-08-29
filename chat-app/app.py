@@ -161,7 +161,7 @@ HTML = """
   </div>
 </div>
 <script>
-var history = [];
+var convo = [];
 var chat = document.getElementById('chat');
 var inp  = document.getElementById('inp');
 var btn  = document.getElementById('send');
@@ -176,15 +176,15 @@ function send(){
   var text = inp.value.trim(); if(!text) return;
   inp.value=''; btn.disabled=true;
   add('you', text, 'user');
-  history.push({role:'user', content:text});
+  convo.push({role:'user', content:text});
   var thinking = add('assistant','…');
   fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({messages:history, model:document.getElementById('model').value})})
+        body: JSON.stringify({messages:convo, model:document.getElementById('model').value})})
     .then(function(r){return r.json();})
     .then(function(d){
       if(d.error){ thinking.className='msg err'; thinking.querySelector('.body').textContent='Error: '+d.error; }
       else{ thinking.querySelector('.body').textContent=d.reply;
-            history.push({role:'assistant', content:d.reply}); }
+            convo.push({role:'assistant', content:d.reply}); }
       btn.disabled=false; inp.focus();
     })
     .catch(function(e){ thinking.className='msg err';
