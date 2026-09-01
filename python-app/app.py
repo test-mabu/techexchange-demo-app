@@ -1324,6 +1324,22 @@ function switchTab(e, id) {
     document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
     e.target.classList.add('active');
     document.getElementById(id).classList.add('active');
+    try { localStorage.setItem('activeTab', id); } catch (err) {}
+}
+
+// Restore the last-selected tab after the periodic auto-refresh, so selecting
+// e.g. "LLM Chat" isn't reset back to "Stress Test" on reload.
+function restoreTab() {
+    var id; try { id = localStorage.getItem('activeTab'); } catch (err) {}
+    var content = id && document.getElementById(id);
+    if (!content) return;
+    document.querySelectorAll('.tab').forEach(function(t){ t.classList.remove('active'); });
+    document.querySelectorAll('.tab-content').forEach(function(t){ t.classList.remove('active'); });
+    content.classList.add('active');
+    document.querySelectorAll('.tab').forEach(function(t){
+        var oc = t.getAttribute('onclick') || '';
+        if (oc.indexOf("'" + id + "'") !== -1) t.classList.add('active');
+    });
 }
 
 function showToast(msg, ok) {
@@ -1372,8 +1388,22 @@ function stopJob(jid) {
     });
 }
 
-// Auto-refresh every 15s
-setTimeout(function(){ location.reload(); }, 15000);
+// Restore the selected tab on (re)load.
+restoreTab();
+
+// Auto-refresh every 15s for live metrics — but don't reload while the user is
+// typing in a field (e.g. an LLM Chat prompt); defer until they're done.
+function scheduleRefresh() {
+    setTimeout(function () {
+        var el = document.activeElement, tag = el && el.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+            scheduleRefresh();   // user is interacting — try again later
+        } else {
+            location.reload();
+        }
+    }, 15000);
+}
+scheduleRefresh();
 </script>
 </body>
 </html>
