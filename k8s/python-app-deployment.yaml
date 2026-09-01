@@ -69,6 +69,25 @@ spec:
           value: "http://vulnerable-echo-service:8085"
         - name: JUICE_SHOP_URL
           value: "http://juice-shop-service"
+        # --- Instana Python tracing (end-to-end trace correlation) ---
+        # The AutoTrace webhook only injects the Node.js profile, which does not
+        # instrument this Python/Flask app, so incoming Flask requests and the
+        # outgoing requests calls to echo/juice carried no trace context and did
+        # not correlate. Activate the in-process Instana Python sensor: `instana`
+        # (and its dep `autowrapt`) ship in the image, AUTOWRAP_PACKAGES makes
+        # autowrapt bootstrap it at startup (auto-instrumenting Flask + urllib3/
+        # requests and propagating X-INSTANA context). INSTANA_AGENT_HOST must be
+        # the node IP (the agent DaemonSet listens on the host), not empty.
+        - name: AUTOWRAP_PACKAGES
+          value: "instana"
+        - name: INSTANA_AGENT_HOST
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        - name: INSTANA_AGENT_PORT
+          value: "42699"
+        - name: INSTANA_SERVICE_NAME
+          value: "load-test-app"
         resources:
           requests:
             memory: "256Mi"

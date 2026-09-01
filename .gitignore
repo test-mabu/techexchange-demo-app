@@ -25,3 +25,7 @@ application-sbom.json
 # OS / editor
 .DS_Store
 *.swp
+
+# local env + tooling (do not commit)
+.env
+.bob/

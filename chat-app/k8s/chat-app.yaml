@@ -6,15 +6,19 @@ metadata:
   namespace: load-testing
 data:
   # ---- LLM backend (OpenAI-compatible for all three) ----
-  # Default: Ollama on the Mac over the LAN.
-  LLM_PROVIDER: "ollama"
-  LLM_BASE_URL: "http://192.168.178.124:11434/v1"
-  LLM_MODEL: "granite3.3:8b"
+  # Active: vLLM on the GPU box (.190), OpenAI-compatible API.
+  LLM_PROVIDER: "openai"
+  LLM_BASE_URL: "http://192.168.178.190:8000/v1"
+  LLM_MODEL: "gpt-oss-120b"
   #
-  # -- vLLM preset (set these three, and LLM_API_KEY in the secret if required):
-  #   LLM_PROVIDER: "vllm"
-  #   LLM_BASE_URL: "http://<vllm-host>:8000/v1"
-  #   LLM_MODEL:    "<served-model-name>"
+  # -- Ollama preset (previous default):
+  #   LLM_PROVIDER: "ollama"
+  #   LLM_BASE_URL: "http://192.168.178.124:11434/v1"
+  #   LLM_MODEL:    "granite3.3:8b"
+  #
+  # -- vLLM: LLM_PROVIDER=openai (vLLM speaks the OpenAI API), LLM_BASE_URL
+  #   http://<vllm-host>:8000/v1, LLM_MODEL = the served model id from /v1/models.
+  #   Set LLM_API_KEY in the secret only if vLLM was started with --api-key.
   #
   # -- OpenAI preset:
   #   LLM_PROVIDER: "openai"
@@ -28,10 +32,15 @@ data:
   TRACING_ENABLED: "true"
   # Traceloop posts OTLP/HTTP to <base>/v1/traces. Instana agent OTLP HTTP = 4318.
   TRACELOOP_BASE_URL: "http://instana-agent.instana-agent:4318"
-  OTEL_EXPORTER_OTLP_ENDPOINT: "instana-agent.instana-agent:4318"
+  # OTLP endpoint needs an explicit http:// scheme or the OTel SDK rejects it.
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://instana-agent.instana-agent:4318"
   TRACELOOP_APP_NAME: "chat-app"
   TRACELOOP_TELEMETRY: "false"            # disable Traceloop's own phone-home
   OTEL_SERVICE_NAME: "chat-app"
+  # k8s resource attributes so Instana correlates this OTLP service into the
+  # load-testing namespace / application perspective (traces reach the agent via
+  # the central Service, which otherwise carries no pod/namespace context).
+  OTEL_RESOURCE_ATTRIBUTES: "service.name=chat-app,k8s.namespace.name=load-testing,k8s.deployment.name=chat-app,service.namespace=load-testing"
 ---
 apiVersion: v1
 kind: Secret

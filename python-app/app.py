@@ -38,6 +38,12 @@ POD_NAMESPACE = os.environ.get("POD_NAMESPACE", "load-testing")
 NODE_NAME = os.environ.get("NODE_NAME", "unknown-node")
 ECHO_SERVICE_URL = os.environ.get('ECHO_SERVICE_URL', 'http://vulnerable-echo-service:8085')
 JUICE_SHOP_URL = os.environ.get('JUICE_SHOP_URL', 'http://juice-shop-service')
+# Loopback to our own HTTP API. Background flood loops call THIS instead of the
+# downstream services directly, so every flood request enters through WSGI and
+# gets a proper Instana entry span -> the downstream call is then linked into
+# one end-to-end distributed trace (load-test-app -> echo/juice) instead of
+# arriving at the backend as an orphan root trace.
+SELF_URL = os.environ.get('SELF_URL', f"http://127.0.0.1:{os.environ.get('PORT', '8080')}")
 
 # ---------------------------------------------------------------------------
 # Thread-safe metrics store
@@ -456,10 +462,19 @@ def _run_echo_flood(job_id, rps, duration, vulnerable):
         while time.time() < end_time:
             if job and job['stop_event'].is_set():
                 break
-            call_echo_service(
-                f"flood-{count} from {POD_NAME}",
-                method='POST', vulnerable_payload=vulnerable,
-            )
+            # Call our own /api/echo endpoint over HTTP (not call_echo_service
+            # directly) so the request enters through WSGI and Instana records a
+            # full end-to-end trace: load-test-app -> vulnerable-echo-service.
+            try:
+                requests.post(
+                    f"{SELF_URL}/api/echo",
+                    json={'message': f"flood-{count} from {POD_NAME}",
+                          'method': 'POST',
+                          'vulnerable_payload': 'true' if vulnerable else 'false'},
+                    timeout=10,
+                )
+            except Exception as e:
+                logger.debug(f"[{job_id}] echo flood iteration error: {e}")
             inc_metric('echo_flood_requests')
             count += 1
             time.sleep(delay)
@@ -576,7 +591,14 @@ def _run_juice_flood(job_id, rps, duration, action):
             if job and job['stop_event'].is_set():
                 break
             act = rotation[count % len(rotation)] if rotation else action
-            call_juice_shop(act)
+            # Call our own /api/juice endpoint over HTTP so the flood request is
+            # traced end-to-end (load-test-app -> juice-shop) instead of arriving
+            # at Juice Shop as an orphan root trace.
+            try:
+                requests.post(f"{SELF_URL}/api/juice",
+                              json={'action': act}, timeout=10)
+            except Exception as e:
+                logger.debug(f"[{job_id}] juice flood iteration error: {e}")
             inc_metric('juice_flood_requests')
             count += 1
             time.sleep(delay)
