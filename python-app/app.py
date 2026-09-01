@@ -38,6 +38,7 @@ POD_NAMESPACE = os.environ.get("POD_NAMESPACE", "load-testing")
 NODE_NAME = os.environ.get("NODE_NAME", "unknown-node")
 ECHO_SERVICE_URL = os.environ.get('ECHO_SERVICE_URL', 'http://vulnerable-echo-service:8085')
 JUICE_SHOP_URL = os.environ.get('JUICE_SHOP_URL', 'http://juice-shop-service')
+CHAT_SERVICE_URL = os.environ.get('CHAT_SERVICE_URL', 'http://chat-service')
 # Loopback to our own HTTP API. Background flood loops call THIS instead of the
 # downstream services directly, so every flood request enters through WSGI and
 # gets a proper Instana entry span -> the downstream call is then linked into
@@ -63,6 +64,11 @@ metrics = {
     'juice_requests_success': 0,
     'juice_requests_failed': 0,
     'juice_flood_requests': 0,
+    'chat_requests_total': 0,
+    'chat_requests_success': 0,
+    'chat_requests_failed': 0,
+    'chat_flood_requests': 0,
+    'last_chat_response_time_ms': 0.0,
     'cpu_usage': 0.0,
     'memory_usage': 0.0,
     'last_echo_response_time_ms': 0.0,
@@ -620,6 +626,87 @@ def start_juice_flood(rps=5, duration=60, action='mixed'):
     return job_id, None
 
 # ---------------------------------------------------------------------------
+# LLM Chat service caller — drives the chat-app (-> vLLM/Ollama/OpenAI).
+# The chat-app continues the distributed trace (W3C traceparent), so this
+# produces an end-to-end trace: load-test-app -> chat-app -> LLM, with the
+# GenAI/LLM span (Traceloop) visible under the loadgen application in Instana.
+# ---------------------------------------------------------------------------
+DEFAULT_CHAT_PROMPTS = [
+    "In one sentence, what is observability?",
+    "Give me a one-line tip for Kubernetes troubleshooting.",
+    "Explain distributed tracing in one sentence.",
+    "What is APM? Answer in one short sentence.",
+    "One sentence: why monitor CPU and memory?",
+]
+
+def call_chat_service(prompt, model=None):
+    """POST a prompt to the chat-app /api/chat. requests is Instana-instrumented,
+    so trace context propagates to chat-app and on to the LLM."""
+    start = time.time()
+    payload = {'messages': [{'role': 'user', 'content': prompt}]}
+    if model:
+        payload['model'] = model
+    try:
+        resp = requests.post(f"{CHAT_SERVICE_URL}/api/chat", json=payload, timeout=120)
+        elapsed_ms = round((time.time() - start) * 1000, 2)
+        inc_metric('chat_requests_total')
+        set_metric('last_chat_response_time_ms', elapsed_ms)
+        if resp.status_code == 200:
+            inc_metric('chat_requests_success')
+            body = resp.json()
+            return {'success': True, 'prompt': prompt,
+                    'reply': body.get('reply'), 'model': body.get('model'),
+                    'usage': body.get('usage'), 'response_time_ms': elapsed_ms}
+        inc_metric('chat_requests_failed')
+        return {'success': False, 'prompt': prompt,
+                'error': f"HTTP {resp.status_code}: {resp.text[:200]}",
+                'response_time_ms': elapsed_ms}
+    except requests.RequestException as e:
+        elapsed_ms = round((time.time() - start) * 1000, 2)
+        inc_metric('chat_requests_total')
+        inc_metric('chat_requests_failed')
+        return {'success': False, 'prompt': prompt, 'error': str(e),
+                'response_time_ms': elapsed_ms}
+
+
+def _run_chat_flood(job_id, rps, duration, prompt):
+    logger.info(f"[{job_id}] Starting chat flood: {rps} rps for {duration}s")
+    job = _active_jobs.get(job_id)
+    delay = 1.0 / max(rps, 1)
+    end_time = time.time() + duration
+    count = 0
+    try:
+        while time.time() < end_time:
+            if job and job['stop_event'].is_set():
+                break
+            p = prompt or DEFAULT_CHAT_PROMPTS[count % len(DEFAULT_CHAT_PROMPTS)]
+            # Loop back through our own /api/chatllm so the request enters WSGI
+            # (Instana entry span) -> chat-app -> LLM as one end-to-end trace.
+            try:
+                requests.post(f"{SELF_URL}/api/chatllm",
+                              json={'prompt': p}, timeout=120)
+            except Exception as e:
+                logger.debug(f"[{job_id}] chat flood iteration error: {e}")
+            inc_metric('chat_flood_requests')
+            count += 1
+            time.sleep(delay)
+        logger.info(f"[{job_id}] Chat flood finished: {count} requests sent")
+    except Exception as e:
+        logger.error(f"[{job_id}] Chat flood error: {e}")
+    finally:
+        unregister_job(job_id)
+
+
+def start_chat_flood(rps=1, duration=60, prompt=None):
+    job_id = f"chat-{uuid.uuid4().hex[:8]}"
+    params = dict(rps=rps, duration=duration, prompt=prompt or '(rotating)')
+    t = threading.Thread(target=_run_chat_flood, daemon=True,
+                         args=(job_id, rps, duration, prompt))
+    register_job(job_id, 'chat_flood', params, thread=t)
+    t.start()
+    return job_id, None
+
+# ---------------------------------------------------------------------------
 # Cluster status via Kubernetes API (optional) + kubectl top pods
 # ---------------------------------------------------------------------------
 def get_cluster_stress_status():
@@ -805,6 +892,7 @@ HTML_TEMPLATE = """
         .tag-ramp   { background: #f39c1233; color: #f39c12; }
         .tag-wave   { background: #9b59b633; color: #9b59b6; }
         .tag-flood  { background: #2ecc7133; color: #2ecc71; }
+        .tag-chat_flood { background: #1abc9c33; color: #1abc9c; }
 
         /* Forms */
         .form-grid {
@@ -955,6 +1043,7 @@ HTML_TEMPLATE = """
             <div class="tab" onclick="switchTab(event,'tab-flood')">Echo Flood</div>
             <div class="tab" onclick="switchTab(event,'tab-juice')">Juice Shop</div>
             <div class="tab" onclick="switchTab(event,'tab-juiceflood')">Juice Flood</div>
+            <div class="tab" onclick="switchTab(event,'tab-chat')">LLM Chat</div>
         </div>
 
         <!-- STRESS TEST -->
@@ -1109,6 +1198,25 @@ HTML_TEMPLATE = """
                     <div class="fg"><label>Duration (sec)</label><input type="number" name="duration" value="120" min="5" max="3600"></div>
                 </div>
                 <button type="submit" class="btn btn-success">Start Juice Flood</button>
+            </form>
+        </div>
+
+        <!-- LLM CHAT -->
+        <div id="tab-chat" class="tab-content">
+            <p style="color:#8899a6; margin-bottom:16px;">Drive the LLM chat service (&rarr; vLLM / Ollama / OpenAI). Requests are trace-propagated, so Instana shows one end-to-end trace <b>load-test-app &rarr; chat-app &rarr; LLM</b> with the GenAI span under this app.</p>
+            <form id="form-chatllm" onsubmit="return submitForm(this, '/api/chatllm')">
+                <div class="fg"><label>Prompt (single call)</label><input type="text" name="prompt" value="In one sentence, what is observability?" style="max-width:560px;"></div>
+                <button type="submit" class="btn btn-primary">Ask Once</button>
+            </form>
+            <hr style="border-color:rgba(255,255,255,0.1); margin:20px 0;">
+            <form id="form-chatflood" onsubmit="return submitForm(this, '/api/chatflood')">
+                <p style="color:#8899a6; margin-bottom:12px;">Sustained chat load (leave prompt empty to rotate through demo prompts).</p>
+                <div class="fg"><label>Prompt (optional)</label><input type="text" name="prompt" value="" placeholder="(rotate demo prompts)" style="max-width:560px;"></div>
+                <div class="form-grid">
+                    <div class="fg"><label>Requests / sec</label><input type="number" name="rps" value="1" min="1" max="10"></div>
+                    <div class="fg"><label>Duration (sec)</label><input type="number" name="duration" value="120" min="5" max="3600"></div>
+                </div>
+                <button type="submit" class="btn btn-success">Start Chat Flood</button>
             </form>
         </div>
     </div>
@@ -1464,6 +1572,32 @@ def api_juiceflood():
         return _respond({'error': err}, 429)
     return _respond({'message': 'Juice flood started',
                      'job_id': jid, 'action': action})
+
+
+@app.route('/api/chatllm', methods=['POST'])
+@app.route('/chatllm', methods=['POST'])
+def api_chatllm():
+    inc_metric('requests_total')
+    d = _form_or_json()
+    prompt = d.get('prompt') or 'In one sentence, what is observability?'
+    result = call_chat_service(prompt=prompt, model=d.get('model'))
+    return _respond(result, 200 if result.get('success') else 502)
+
+
+@app.route('/api/chatflood', methods=['POST'])
+@app.route('/chatflood', methods=['POST'])
+def api_chatflood():
+    inc_metric('requests_total')
+    d = _form_or_json()
+    prompt = d.get('prompt') or None   # None -> rotate through DEFAULT_CHAT_PROMPTS
+    jid, err = start_chat_flood(
+        rps=min(int(d.get('rps', 1)), 10),
+        duration=min(int(d.get('duration', 120)), 3600),
+        prompt=prompt,
+    )
+    if err:
+        return _respond({'error': err}, 429)
+    return _respond({'message': 'Chat flood started', 'job_id': jid})
 
 
 @app.route('/api/stop', methods=['POST'])

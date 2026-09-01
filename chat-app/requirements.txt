@@ -9,3 +9,7 @@ traceloop-sdk==0.33.12
 # Pinned to the OpenTelemetry line that traceloop-sdk 0.33.x requires (1.28.x).
 opentelemetry-exporter-otlp-proto-grpc>=1.28.0,<1.29.0
 opentelemetry-exporter-otlp-proto-http>=1.28.0,<1.29.0
+# Continue upstream distributed traces (incoming Flask + outgoing requests).
+# Range matches what traceloop-sdk's instrumentations require (>=0.49b0,<0.50).
+opentelemetry-instrumentation-flask>=0.49b0,<0.50
+opentelemetry-instrumentation-requests>=0.49b0,<0.50

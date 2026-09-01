@@ -69,6 +69,8 @@ spec:
           value: "http://vulnerable-echo-service:8085"
         - name: JUICE_SHOP_URL
           value: "http://juice-shop-service"
+        - name: CHAT_SERVICE_URL
+          value: "http://chat-service"
         # --- Instana Python tracing (end-to-end trace correlation) ---
         # The AutoTrace webhook only injects the Node.js profile, which does not
         # instrument this Python/Flask app, so incoming Flask requests and the
@@ -88,6 +90,10 @@ spec:
           value: "42699"
         - name: INSTANA_SERVICE_NAME
           value: "load-test-app"
+        # Emit W3C traceparent on outgoing calls so the chat-app (OpenTelemetry/
+        # Traceloop) continues the same trace: load-test-app -> chat-app -> LLM.
+        - name: INSTANA_ENABLE_W3C_TRACE_CORRELATION
+          value: "true"
         resources:
           requests:
             memory: "256Mi"

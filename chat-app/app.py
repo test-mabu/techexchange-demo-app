@@ -92,6 +92,20 @@ client = OpenAI(base_url=BASE_URL, api_key=API_KEY or "none", timeout=REQUEST_TI
 
 app = Flask(__name__)
 
+# Instrument incoming Flask requests + outgoing requests so this service
+# *continues* an upstream distributed trace (W3C traceparent). Without this,
+# Traceloop only traces the LLM call and an incoming request has no server span
+# to attach to — so a caller (e.g. load-test-app) can't link to the LLM span.
+if _tracing_status["enabled"]:
+    try:
+        from opentelemetry.instrumentation.flask import FlaskInstrumentor
+        from opentelemetry.instrumentation.requests import RequestsInstrumentor
+        FlaskInstrumentor().instrument_app(app)
+        RequestsInstrumentor().instrument()
+        logger.info("Flask + requests instrumented (incoming trace-context continuation)")
+    except Exception as e:
+        logger.warning(f"HTTP instrumentation unavailable: {e}")
+
 
 def _chat_once(messages, model):
     """Single chat completion. The OpenAI call is auto-instrumented by
