@@ -19,7 +19,11 @@ data:
 
     instances:
       - otel.agentless.mode: false
-        otel.backend.url: http://instana-agent.instana-agent:4317
+        # Node-local Instana agent. ODCG is designed to sit beside an agent
+        # (its own default is 127.0.0.1:4317); the pod uses hostNetwork so this
+        # reaches the agent on its node instead of a random agent pod via the
+        # Service, which would spread the 10s callbacks across agents.
+        otel.backend.url: http://127.0.0.1:4317
         otel.backend.using.http: false
         callback.interval: 10
         otel.service.name: DC1
@@ -49,6 +53,8 @@ spec:
       annotations:
         instana.io/monitored: "true"
     spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
       containers:
       - name: odcg
         image: docker.io/mbx1010/otel-dc-genai:1.0.10
