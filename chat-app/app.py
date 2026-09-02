@@ -10,6 +10,7 @@ LLM Chat App for the AIOps demo.
 """
 
 import os
+import time
 import logging
 from datetime import datetime
 
@@ -107,13 +108,110 @@ if _tracing_status["enabled"]:
         logger.warning(f"HTTP instrumentation unavailable: {e}")
 
 
+# ---------------------------------------------------------------------------
+# Instana Gen AI metrics.
+#
+# Traceloop 0.33 emits the *new* OTel GenAI semconv metrics
+# (gen_ai.client.token.usage / .operation.duration / .generation.choices).
+# Instana's Gen AI dashboard aggregates the older "llm.*" convention instead
+# (llm.usage.input_tokens, llm.usage.output_tokens, llm.usage.total_tokens,
+#  llm.response.duration, llm.request.count) tagged with service_name /
+# model_id / ai_system. Without these the dashboard tiles stay empty even
+# though the traces arrive. Emit them explicitly from the usage the provider
+# already returns.
+# ---------------------------------------------------------------------------
+DURATION_UNIT   = os.environ.get("LLM_DURATION_UNIT", "ms").lower()      # ODCL uses ms
+METRIC_INTERVAL = int(os.environ.get("LLM_METRIC_INTERVAL_MS", "15000"))
+AI_SYSTEM       = os.environ.get("LLM_AI_SYSTEM", "openai")
+
+_llm_metrics = {}
+
+
+def _init_llm_metrics():
+    """Emit the metrics Instana's Gen AI dashboard aggregates (oTelLLM entity).
+
+    Instana's own OTel Data Collector for LLM (ODCL, instana/otel-dc) produces:
+      resource   INSTANA_PLUGIN=llmonitor, llm.platform=LLM
+      gauges     llm.usage.{input,output,total}_tokens, llm.response.duration (ms)
+      counter    llm.request.count
+      datapoint  service_name, ai_system, model_id="<ai_system>:<model>"
+    Traceloop instead emits the newer gen_ai.client.* semconv, which this
+    dashboard does not read — so we emit the llm.* set ourselves.
+
+    Uses a DEDICATED MeterProvider so the INSTANA_PLUGIN resource attribute
+    does not leak onto Traceloop's spans/metrics and reclassify the service.
+    """
+    if not _tracing_status["enabled"]:
+        return
+    try:
+        from opentelemetry.sdk.metrics import MeterProvider
+        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+        from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+        from opentelemetry.sdk.resources import Resource
+
+        endpoint = _otlp_http_base() + "/v1/metrics"
+        resource = Resource.create({
+            "service.name": APP_NAME,
+            "service.instance.id": POD_NAME,
+            "INSTANA_PLUGIN": "llmonitor",
+            "llm.platform": "LLM",
+        })
+        reader = PeriodicExportingMetricReader(
+            OTLPMetricExporter(endpoint=endpoint),
+            export_interval_millis=METRIC_INTERVAL,
+        )
+        mp = MeterProvider(resource=resource, metric_readers=[reader])
+        m = mp.get_meter("instana.llmonitor", "1.0.0")
+        _llm_metrics.update(
+            provider=mp,
+            input_tokens=m.create_gauge("llm.usage.input_tokens", unit="{token}"),
+            output_tokens=m.create_gauge("llm.usage.output_tokens", unit="{token}"),
+            total_tokens=m.create_gauge("llm.usage.total_tokens", unit="{token}"),
+            duration=m.create_gauge("llm.response.duration", unit="ms"),
+            requests=m.create_counter("llm.request.count", unit="{count}"),
+        )
+        logger.info(f"Instana llmonitor metrics -> {endpoint} "
+                    f"(every {METRIC_INTERVAL}ms, ai_system={AI_SYSTEM})")
+    except Exception as e:
+        logger.warning(f"Gen AI metrics unavailable: {e}")
+
+
+_init_llm_metrics()
+
+
+def _record_llm_metrics(model, usage, elapsed_s):
+    if not _llm_metrics:
+        return
+    try:
+        attrs = {
+            "service_name": APP_NAME,
+            "ai_system": AI_SYSTEM,
+            "model_id": f"{AI_SYSTEM}:{model}",     # ODCL joins system and model
+        }
+        pt = (usage or {}).get("prompt_tokens") or 0
+        ct = (usage or {}).get("completion_tokens") or 0
+        tt = (usage or {}).get("total_tokens") or (pt + ct)
+        _llm_metrics["input_tokens"].set(pt, attrs)
+        _llm_metrics["output_tokens"].set(ct, attrs)
+        _llm_metrics["total_tokens"].set(tt, attrs)
+        _llm_metrics["duration"].set(
+            round(elapsed_s * 1000, 2) if DURATION_UNIT == "ms" else round(elapsed_s, 4), attrs)
+        _llm_metrics["requests"].add(1, attrs)
+    except Exception as e:
+        logger.debug(f"metric record failed: {e}")
+
+
 def _chat_once(messages, model):
     """Single chat completion. The OpenAI call is auto-instrumented by
     Traceloop (OpenLLMetry), so the LLM span + token usage export to Instana."""
+    _t0 = time.monotonic()
     resp = client.chat.completions.create(model=model, messages=messages)
+    elapsed = time.monotonic() - _t0
     choice = resp.choices[0].message.content
     usage = getattr(resp, "usage", None)
-    return choice, (usage.model_dump() if usage and hasattr(usage, "model_dump") else None)
+    usage_d = usage.model_dump() if usage and hasattr(usage, "model_dump") else None
+    _record_llm_metrics(model, usage_d, elapsed)
+    return choice, usage_d
 
 
 # ============================================================================
