@@ -1,0 +1,76 @@
+# ODCG — Instana OTel Data Collector for GenAI (instana/otel-dc).
+#
+# Pipeline:
+#   chat-app (Traceloop) --OTLP/gRPC gen_ai.client.* metrics--> odcg:8000
+#   odcg --llm.* metrics (INSTANA_PLUGIN=llmonitor)--> instana-agent:4317
+#   Instana --> oTelLLM entity --> Gen AI observability dashboard
+#
+# Traceloop 0.33 emits the new OTel GenAI semconv (gen_ai.client.*), which is
+# exactly what ODCG consumes; ODCG converts it to the llm.* set the dashboard
+# aggregates and applies per-model pricing.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: odcg-config
+  namespace: load-testing
+data:
+  config.yaml: |
+    genai.application: GENAI_DC
+
+    instances:
+      - otel.agentless.mode: false
+        otel.backend.url: http://instana-agent.instana-agent:4317
+        otel.backend.using.http: false
+        callback.interval: 10
+        otel.service.name: DC1
+        otel.service.port: 8000
+        currency: USD
+  prices.properties: |
+    # <aiSystem>.<modelId>.input / .output  (per 1000 tokens)
+    # Self-hosted vLLM has no per-token cost; keep 0.0 so cost tiles stay honest.
+    # Set real numbers here to make the Cost tiles meaningful.
+    openai.gpt-oss-120b.input=0.0
+    openai.gpt-oss-120b.output=0.0
+    openai.*.input=0.0
+    openai.*.output=0.0
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: odcg
+  namespace: load-testing
+  labels: {app: odcg, component: ai}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: odcg}}
+  template:
+    metadata:
+      labels: {app: odcg, component: ai}
+      annotations:
+        instana.io/monitored: "true"
+    spec:
+      containers:
+      - name: odcg
+        image: docker.io/mbx1010/otel-dc-genai:1.0.10
+        imagePullPolicy: Always
+        ports: [{containerPort: 8000, name: otlp-grpc}]
+        volumeMounts:
+        - {name: config, mountPath: /opt/otel-dc-genai/config/config.yaml, subPath: config.yaml}
+        - {name: config, mountPath: /opt/otel-dc-genai/config/prices.properties, subPath: prices.properties}
+        resources:
+          requests: {memory: "256Mi", cpu: "50m"}
+          limits: {memory: "768Mi", cpu: "500m"}
+      volumes:
+      - name: config
+        configMap: {name: odcg-config}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: odcg
+  namespace: load-testing
+  labels: {app: odcg}
+spec:
+  type: ClusterIP
+  ports: [{port: 8000, targetPort: 8000, name: otlp-grpc}]
+  selector: {app: odcg}

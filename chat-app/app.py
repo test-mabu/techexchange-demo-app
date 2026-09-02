@@ -40,6 +40,10 @@ TRACING_ENABLED = os.environ.get("TRACING_ENABLED", "true").lower() in ("1", "tr
 OTLP_ENDPOINT   = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "instana-agent.instana-agent:4317")
 OTLP_PROTOCOL   = os.environ.get("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc").lower()  # grpc | http
 APP_NAME        = os.environ.get("TRACELOOP_APP_NAME", "chat-app")
+# ODCG (Instana OTel Data Collector for GenAI) OTLP/gRPC endpoint, e.g.
+# "odcg.load-testing:8000". When set, Traceloop's gen_ai.client.* metrics go
+# there; ODCG converts them to the llm.* set Instana's Gen AI dashboard reads.
+ODCG_ENDPOINT   = os.environ.get("ODCG_ENDPOINT", "").strip()
 
 POD_NAME  = os.environ.get("POD_NAME", "chat-app")
 NODE_NAME = os.environ.get("NODE_NAME", "unknown-node")
@@ -74,9 +78,17 @@ def _init_tracing():
         os.environ["TRACELOOP_BASE_URL"] = base
         os.environ.setdefault("TRACELOOP_TELEMETRY", "false")
         from traceloop.sdk import Traceloop
-        Traceloop.init(app_name=APP_NAME, disable_batch=False)
-        _tracing_status.update(enabled=True, endpoint=base + "/v1/traces", protocol="http")
+        kwargs = {}
+        if ODCG_ENDPOINT:
+            from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+            kwargs["metrics_exporter"] = OTLPMetricExporter(
+                endpoint=ODCG_ENDPOINT, insecure=True)
+        Traceloop.init(app_name=APP_NAME, disable_batch=False, **kwargs)
+        _tracing_status.update(enabled=True, endpoint=base + "/v1/traces", protocol="http",
+                               odcg=ODCG_ENDPOINT or None)
         logger.info(f"Traceloop tracing -> {base}/v1/traces as '{APP_NAME}'")
+        if ODCG_ENDPOINT:
+            logger.info(f"Traceloop gen_ai.client.* metrics -> ODCG {ODCG_ENDPOINT} (OTLP/gRPC)")
     except Exception as e:
         _tracing_status["error"] = str(e)
         logger.error(f"Failed to init tracing: {e}")
@@ -123,6 +135,9 @@ if _tracing_status["enabled"]:
 DURATION_UNIT   = os.environ.get("LLM_DURATION_UNIT", "ms").lower()      # ODCL uses ms
 METRIC_INTERVAL = int(os.environ.get("LLM_METRIC_INTERVAL_MS", "15000"))
 AI_SYSTEM       = os.environ.get("LLM_AI_SYSTEM", "openai")
+# Interim fallback: emit llm.* directly. Leave OFF when ODCG is deployed,
+# otherwise both ODCG and this app report the same metrics (double counting).
+LLM_METRICS_ENABLED = os.environ.get("LLM_METRICS_ENABLED", "false").lower() in ("1","true","yes")
 
 _llm_metrics = {}
 
@@ -141,7 +156,7 @@ def _init_llm_metrics():
     Uses a DEDICATED MeterProvider so the INSTANA_PLUGIN resource attribute
     does not leak onto Traceloop's spans/metrics and reclassify the service.
     """
-    if not _tracing_status["enabled"]:
+    if not _tracing_status["enabled"] or not LLM_METRICS_ENABLED:
         return
     try:
         from opentelemetry.sdk.metrics import MeterProvider

@@ -35,6 +35,11 @@ data:
   # OTLP endpoint needs an explicit http:// scheme or the OTel SDK rejects it.
   OTEL_EXPORTER_OTLP_ENDPOINT: "http://instana-agent.instana-agent:4318"
   TRACELOOP_APP_NAME: "chat-app"
+  # Traceloop's gen_ai.client.* metrics go to ODCG, which converts them into the
+  # llm.* set Instana's Gen AI dashboard reads (oTelLLM entity). Traces still go
+  # straight to the agent. Leave LLM_METRICS_ENABLED off while ODCG runs.
+  ODCG_ENDPOINT: "odcg.load-testing:8000"
+  LLM_METRICS_ENABLED: "false"
   TRACELOOP_TELEMETRY: "false"            # disable Traceloop's own phone-home
   OTEL_SERVICE_NAME: "chat-app"
   # k8s resource attributes so Instana correlates this OTLP service into the
