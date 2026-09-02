@@ -669,10 +669,19 @@ def call_chat_service(prompt, model=None):
                 'response_time_ms': elapsed_ms}
 
 
-def _run_chat_flood(job_id, rps, duration, prompt):
-    logger.info(f"[{job_id}] Starting chat flood: {rps} rps for {duration}s")
+def _run_chat_flood(job_id, rpm, duration, prompt):
+    """Chat load paced in requests per MINUTE.
+
+    LLM calls routinely take seconds, so a per-second rate is meaningless here.
+    The wait is measured from the start of each call, so a slow call consumes
+    its interval instead of adding to it: at 6/min you get one call every 10s
+    whether the model answers in 1s or 8s. If a call outruns the interval the
+    next one starts immediately (no negative sleep, no pile-up).
+    """
+    interval = 60.0 / max(float(rpm), 0.2)
+    logger.info(f"[{job_id}] Starting chat flood: {rpm} req/min "
+                f"(one every {interval:.1f}s) for {duration}s")
     job = _active_jobs.get(job_id)
-    delay = 1.0 / max(rps, 1)
     end_time = time.time() + duration
     count = 0
     try:
@@ -680,16 +689,17 @@ def _run_chat_flood(job_id, rps, duration, prompt):
             if job and job['stop_event'].is_set():
                 break
             p = prompt or DEFAULT_CHAT_PROMPTS[count % len(DEFAULT_CHAT_PROMPTS)]
+            started = time.time()
             # Loop back through our own /api/chatllm so the request enters WSGI
             # (Instana entry span) -> chat-app -> LLM as one end-to-end trace.
             try:
                 requests.post(f"{SELF_URL}/api/chatllm",
-                              json={'prompt': p}, timeout=120)
+                              json={'prompt': p}, timeout=300)
             except Exception as e:
                 logger.debug(f"[{job_id}] chat flood iteration error: {e}")
             inc_metric('chat_flood_requests')
             count += 1
-            time.sleep(delay)
+            time.sleep(max(0.0, interval - (time.time() - started)))
         logger.info(f"[{job_id}] Chat flood finished: {count} requests sent")
     except Exception as e:
         logger.error(f"[{job_id}] Chat flood error: {e}")
@@ -697,11 +707,11 @@ def _run_chat_flood(job_id, rps, duration, prompt):
         unregister_job(job_id)
 
 
-def start_chat_flood(rps=1, duration=60, prompt=None):
+def start_chat_flood(rpm=6, duration=300, prompt=None):
     job_id = f"chat-{uuid.uuid4().hex[:8]}"
-    params = dict(rps=rps, duration=duration, prompt=prompt or '(rotating)')
+    params = dict(rpm=rpm, duration=duration, prompt=prompt or '(rotating)')
     t = threading.Thread(target=_run_chat_flood, daemon=True,
-                         args=(job_id, rps, duration, prompt))
+                         args=(job_id, rpm, duration, prompt))
     register_job(job_id, 'chat_flood', params, thread=t)
     t.start()
     return job_id, None
@@ -1019,6 +1029,7 @@ HTML_TEMPLATE = """
                     {% if j.params.duration is defined %} | {{ j.params.duration }}s{% endif %}
                     {% if j.params.memory_workers is defined and j.params.memory_workers > 0 %} | Mem: {{ j.params.memory_workers }}x{{ j.params.memory_size|default('256M') }}{% endif %}
                     {% if j.params.rps is defined %}{{ j.params.rps }} rps | {{ j.params.duration }}s{% endif %}
+                    {% if j.params.rpm is defined %}{{ j.params.rpm|round(1) }} req/min | {{ j.params.duration }}s{% endif %}
                     {% if j.params.max_workers is defined %}max {{ j.params.max_workers }} workers | {{ j.params.steps|default('') }} steps{% endif %}
                 </span>
                 {% endif %}
@@ -1213,9 +1224,10 @@ HTML_TEMPLATE = """
                 <p style="color:#8899a6; margin-bottom:12px;">Sustained chat load (leave prompt empty to rotate through demo prompts).</p>
                 <div class="fg"><label>Prompt (optional)</label><input type="text" name="prompt" value="" placeholder="(rotate demo prompts)" style="max-width:560px;"></div>
                 <div class="form-grid">
-                    <div class="fg"><label>Requests / sec</label><input type="number" name="rps" value="1" min="1" max="10"></div>
-                    <div class="fg"><label>Duration (sec)</label><input type="number" name="duration" value="120" min="5" max="3600"></div>
+                    <div class="fg"><label>Requests / minute</label><input type="number" name="rpm" value="6" min="1" max="120"></div>
+                    <div class="fg"><label>Duration (sec)</label><input type="number" name="duration" value="600" min="5" max="86400"></div>
                 </div>
+                <p style="color:#5c6d7e; font-size:0.85em; margin-bottom:12px;">Paced per minute &mdash; LLM calls take seconds, and a slow call consumes its interval rather than adding to it. 6/min = one every 10s.</p>
                 <button type="submit" class="btn btn-success">Start Chat Flood</button>
             </form>
         </div>
@@ -1620,14 +1632,20 @@ def api_chatflood():
     inc_metric('requests_total')
     d = _form_or_json()
     prompt = d.get('prompt') or None   # None -> rotate through DEFAULT_CHAT_PROMPTS
+    rpm = d.get('rpm')
+    if rpm in (None, ''):
+        # backwards compatible: older callers sent requests/second
+        rpm = float(d.get('rps') or 0.1) * 60
+    rpm = min(max(float(rpm), 0.2), 120)
     jid, err = start_chat_flood(
-        rps=min(int(d.get('rps', 1)), 10),
-        duration=min(int(d.get('duration', 120)), 3600),
+        rpm=rpm,
+        duration=min(int(d.get('duration', 300)), 86400),
         prompt=prompt,
     )
     if err:
         return _respond({'error': err}, 429)
-    return _respond({'message': 'Chat flood started', 'job_id': jid})
+    return _respond({'message': 'Chat flood started', 'job_id': jid,
+                     'rpm': rpm, 'interval_seconds': round(60.0 / rpm, 1)})
 
 
 @app.route('/api/stop', methods=['POST'])
