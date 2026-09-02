@@ -1,0 +1,42 @@
+# Continuous low-rate LLM traffic so the Instana Gen AI dashboard always has
+# data. Without it, ODCG reports zeros between demo runs and the token / call /
+# latency tiles look empty (and Instana eventually deactivates an idle OTel
+# source). One call every HEARTBEAT_INTERVAL seconds is enough.
+#
+# It goes through load-test-app/api/chatllm rather than calling chat-app
+# directly, so the end-to-end trace (load-test-app -> chat-app -> vLLM) stays
+# alive too, not just the metrics.
+#
+# Turn it off:  kubectl -n load-testing scale deploy/chat-heartbeat --replicas=0
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chat-heartbeat
+  namespace: load-testing
+  labels: {app: chat-heartbeat, component: ai}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: chat-heartbeat}}
+  template:
+    metadata:
+      labels: {app: chat-heartbeat, component: ai}
+    spec:
+      containers:
+      - name: heartbeat
+        image: curlimages/curl:8.11.1
+        env:
+        - {name: TARGET,   value: "http://load-test-service/api/chatllm"}
+        - {name: INTERVAL, value: "30"}
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            echo "chat heartbeat -> $TARGET every ${INTERVAL}s"
+            while true; do
+              curl -s -m 90 -o /dev/null -w "%{http_code} " \
+                -X POST "$TARGET" -H 'Content-Type: application/json' \
+                -d '{"prompt":"Reply with one short sentence: what is observability?"}' || true
+              sleep "$INTERVAL"
+            done
+        resources:
+          requests: {memory: "16Mi", cpu: "5m"}
+          limits:   {memory: "64Mi", cpu: "50m"}

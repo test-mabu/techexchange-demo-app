@@ -121,6 +121,69 @@ if _tracing_status["enabled"]:
 
 
 # ---------------------------------------------------------------------------
+# GenAI semconv normaliser.
+#
+# Traceloop 0.33 writes the *legacy* token attribute names onto the span and
+# capitalises gen_ai.system ("OpenAI"). The current OTel GenAI semantic
+# convention — which Instana's Gen AI dashboard parses for model + token
+# aggregation — expects lowercase gen_ai.system and
+# gen_ai.usage.input_tokens / output_tokens. Without them Instana can see the
+# service but not the model or the tokens (Models 0, LLM calls 0, empty tiles).
+#
+# Add the conformant names alongside the originals as each span ends.
+# ---------------------------------------------------------------------------
+def _install_semconv_fixer():
+    if not _tracing_status["enabled"]:
+        return
+    try:
+        from opentelemetry.sdk.trace import SpanProcessor
+        from opentelemetry import trace as _trace
+
+        MAP = {
+            "gen_ai.usage.prompt_tokens":     "gen_ai.usage.input_tokens",
+            "gen_ai.usage.completion_tokens": "gen_ai.usage.output_tokens",
+            "llm.usage.total_tokens":         "gen_ai.usage.total_tokens",
+        }
+
+        class GenAISemconv(SpanProcessor):
+            def on_start(self, span, parent_context=None):
+                pass
+
+            def on_end(self, span):
+                try:
+                    attrs = span.attributes
+                    if not attrs or "gen_ai.system" not in attrs:
+                        return
+                    merged = dict(attrs)
+                    for legacy, modern in MAP.items():
+                        if legacy in merged and modern not in merged:
+                            merged[modern] = merged[legacy]
+                    sysv = merged.get("gen_ai.system")
+                    if isinstance(sysv, str) and sysv != sysv.lower():
+                        merged["gen_ai.system"] = sysv.lower()
+                    if "gen_ai.operation.name" not in merged:
+                        merged["gen_ai.operation.name"] = merged.get("llm.request.type", "chat")
+                    span._attributes = merged
+                except Exception:
+                    pass
+
+            def shutdown(self):
+                pass
+
+            def force_flush(self, timeout_millis=30000):
+                return True
+
+        _trace.get_tracer_provider().add_span_processor(GenAISemconv())
+        logger.info("GenAI semconv normaliser installed "
+                    "(gen_ai.usage.input_tokens/output_tokens, lowercase gen_ai.system)")
+    except Exception as e:
+        logger.warning(f"semconv normaliser unavailable: {e}")
+
+
+_install_semconv_fixer()
+
+
+# ---------------------------------------------------------------------------
 # Instana Gen AI metrics.
 #
 # Traceloop 0.33 emits the *new* OTel GenAI semconv metrics

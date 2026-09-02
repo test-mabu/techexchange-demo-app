@@ -65,6 +65,12 @@ metadata:
   labels: {app: chat-app, component: ai, tier: web}
 spec:
   replicas: 1
+  # Cluster CPU *requests* are oversubscribed, so a surge pod cannot be
+  # scheduled during a rollout. Replace in place instead (single replica,
+  # brief restart is fine for this demo service).
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 0, maxUnavailable: 1}
   selector: {matchLabels: {app: chat-app}}
   template:
     metadata:
