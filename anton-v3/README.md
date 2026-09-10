@@ -74,6 +74,8 @@ catalog; the manifests keep `tag: latest` only as the fallback.
 | Instana / Prometheus annotations, labels | not expressible | Instana still sees the pods via the agent; `instana-autotrace` label not settable |
 | chat-app `command`/`args` override (`unset LD_PRELOAD …`) + pod label `instana-autotrace: "false"` | not expressible | **verified 2026-09-10:** with the AutoTrace webhook active, the injected Instana Python sensor collides with the app's OTel/Traceloop instrumentation → `/health` 500. Therefore `tracing-enabled` defaults to `"false"`; set it to `"true"` only after opting the namespace out (`kubectl label ns <ns> instana-autotrace=false`) |
 | echo-service `runAsUser: 1000` | only `runAsNonRoot` | **verified 2026-09-10:** the image runs as root → `runAsNonRoot: false`, otherwise `CreateContainerConfigError` |
+| load-test-app `runAsUser: 1000` | only `runAsNonRoot` | **verified 2026-09-10:** image USER is the *name* `appuser`; k8s cannot verify a non-numeric user → `runAsNonRoot: false`. A `security.runAsUser` field in v3 `_generic` would fix both cases properly (framework TODO) |
+| resources `requests`/`limits` | profile `sizing[t-shirt]` | **verified 2026-09-10:** `M` = 1 CPU does not schedule on the lab cluster (nodes at 77–95 % CPU requests) → all nodes default to `S` (250m) |
 | `demo-hub` (nginx + HTML ConfigMap) | needs a ConfigMap mount | not included — bake the HTML into an image or write a specific worker |
 | `ServiceAccount` + `Role` + `app-secrets` | profile `serviceAccount`; secrets unused by the apps | dropped |
 

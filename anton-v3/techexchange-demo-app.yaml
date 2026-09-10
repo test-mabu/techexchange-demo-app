@@ -121,7 +121,9 @@ spec:
         path: /health
         port: 8080
     security:
-      runAsNonRoot: true
+      runAsNonRoot: false  # image USER is the name 'appuser' (non-root, but not numeric): with true k8s refuses
+                           # "image has non-numeric user (appuser), cannot verify user is non-root". The original
+                           # fixes this with runAsUser: 1000, which v3 cannot express -> see README
     outputs:
       fqdn:
         template: "${serviceFqdn}"
