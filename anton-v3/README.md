@@ -45,6 +45,33 @@ All four are **data-driven** (`spec.deployment` present) — no specific worker 
 3. Result per node in the CMDB record (`cmdb/deployments/<ci>.json`): `status`, `outputs`
    (`fqdn`, `url`, …), `image{registry_digest,…}` once the images are in the catalog.
 
+## Deploy on native Linux (same manifests, `target=ansible`)
+
+Since 2026-09-10 the framework has `Provisioning/ansible/_generic`: one podman container per product on a
+Linux host, driven by `system/Ansible/Playbook` over the SSH auth `admin/ansible-host-linux`. Nothing in the
+manifests changes except the `targets.ansible` block (already present).
+
+```
+applicationName    = techexchange-demo-app
+target             = ansible
+environment        = lab
+targetNamespace    = techexchange-demo     # becomes the podman network (container DNS for the wiring)
+skipAuthCheck      = true                  # the OpenShift auth/namespace checks do not apply
+skipNamespaceCheck = true
+applyMode          = create-only           # recreate replaces the containers; secrets/dirs are kept
+```
+
+Result on the host (`192.168.178.61`, base dir `~/concert-deploy/<namespace>/<product>/`):
+
+| Product | Container | Reachable |
+|---|---|---|
+| techexchange-demo-app | `techexchange-demo-app` | **`http://192.168.178.61:18080`** (`hostPorts: 8080→18080`, host port 8080 is taken) — CMDB output `external_url` |
+| echo-service, juice-shop, chat-app | same names | inside the `techexchange-demo` podman network only (`http://echo-service:8080`, …) |
+
+Verified with the root product: `/health` → 200 on 18080, process runs as UID 1000, a second run with
+`create-only` changes nothing. Rootless notes: CPU limits are dropped when the `cpu` cgroup controller is not
+delegated (`limits_dropped` in the result); readiness probes use a loopback port mapping.
+
 ## Order-time inputs worth knowing
 
 | Node | Property | Default | Note |

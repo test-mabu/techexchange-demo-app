@@ -71,6 +71,9 @@
         },
         "k8s": {
           "expose": "none"
+        },
+        "ansible": {
+          "expose": "none"
         }
       }
     }

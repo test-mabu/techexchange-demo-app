@@ -186,6 +186,12 @@
         },
         "k8s": {
           "expose": "none"
+        },
+        "ansible": {
+          "expose": "host",
+          "hostPorts": {
+            "8080": 18080
+          }
         }
       }
     }

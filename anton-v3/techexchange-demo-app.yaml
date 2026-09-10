@@ -144,6 +144,10 @@ spec:
         expose: route                  # Route <base>.<routeDomain> (profile) — replaces the Traefik ingress
       k8s:
         expose: none                   # k3s/Traefik ingress is outside the v3 data model (see README)
+      ansible:                         # native Linux (podman via Provisioning/ansible/_generic)
+        expose: host                   # publish the container ports on the host -> external_url
+        hostPorts:
+          "8080": 18080                # host port 8080 is taken on the lab host (.61)
 
 status:
   success:

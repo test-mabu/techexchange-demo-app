@@ -84,6 +84,8 @@ spec:
         expose: none
       k8s:
         expose: none
+      ansible:
+        expose: none                   # reachable inside the podman network only (container DNS)
 
 status:
   success:
