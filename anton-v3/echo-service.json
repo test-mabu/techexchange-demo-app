@@ -108,7 +108,10 @@
           "expose": "none"
         },
         "ansible": {
-          "expose": "none"
+          "expose": "none",
+          "hostPorts": {
+            "8080": 18081
+          }
         }
       }
     }

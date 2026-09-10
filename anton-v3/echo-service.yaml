@@ -85,7 +85,10 @@ spec:
       k8s:
         expose: none
       ansible:
-        expose: none                   # reachable inside the podman network only (container DNS)
+        expose: none                   # inside the podman network only — unless a consumer in another
+                                       # scope needs it (Build sets exposeExternal), then via hostPorts:
+        hostPorts:
+          "8080": 18081                # host port 8080 is taken on the lab host (.61)
 
 status:
   success:
