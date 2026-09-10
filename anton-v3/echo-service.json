@@ -43,20 +43,12 @@
       "ports": [
         {
           "name": "http",
-          "port": 8085
-        },
-        {
-          "name": "management",
           "port": 8080
         }
       ],
       "storage": [],
       "secrets": [],
       "env": [
-        {
-          "name": "SERVER_PORT",
-          "value": "8085"
-        },
         {
           "name": "JAVA_OPTS",
           "value": "-Xmx512m -Xms256m -Dlog4j.configurationFile=/app/log4j2.xml"
@@ -77,7 +69,7 @@
       "probes": {
         "httpGet": {
           "path": "/health",
-          "port": 8085
+          "port": 8080
         }
       },
       "security": {
@@ -88,10 +80,10 @@
           "template": "${serviceFqdn}"
         },
         "http-port": {
-          "value": 8085
+          "value": 8080
         },
         "url": {
-          "template": "http://${serviceFqdn}:8085"
+          "template": "http://${serviceFqdn}:8080"
         }
       },
       "targets": {

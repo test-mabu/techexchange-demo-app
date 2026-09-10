@@ -6,7 +6,7 @@ Format reference: `bwi-concert-orchestration/docs/antonv3-manifest-format.md`.
 
 ```
 techexchange-demo-app          (root = Load Test App, Flask :8080)
- ├─ echo-service               (Spring Boot + Log4j CVE-2021-44228, :8085/:8080)
+ ├─ echo-service               (Java + Log4j CVE-2021-44228, :8080 — the published 3.0.0 image ignores SERVER_PORT)
  ├─ juice-shop                 (OWASP Juice Shop, :3000)
  └─ chat-app   [optional]      (LLM chat + Traceloop → Instana, :8080)
 ```
