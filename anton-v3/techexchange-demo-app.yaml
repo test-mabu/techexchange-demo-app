@@ -29,7 +29,8 @@ spec:
         - M
         - L
         - XL
-      default: M           # profile sizing[M] -> resources (original: 256Mi/100m req, 512Mi/250m lim)
+      default: S           # profile sizing[S] = 250m/512Mi (original: 100m/256Mi req). M (1 CPU) does not
+                           # schedule on the lab cluster (nodes at 77-95 % CPU requests, 2026-09-10)
     redundancy:
       source: input
       enum:

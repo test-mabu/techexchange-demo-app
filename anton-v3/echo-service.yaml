@@ -22,7 +22,7 @@ spec:
         - M
         - L
         - XL
-      default: M           # original: 512Mi/100m req, 1Gi/250m lim
+      default: S           # 250m/512Mi (original: 100m/512Mi req); M = 1 CPU does not schedule on the lab cluster
     redundancy:
       source: input
       enum:
