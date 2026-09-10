@@ -88,7 +88,13 @@ spec:
     ports:
       - name: http
         port: 8080
-    storage: []            # original used emptyDir for /tmp and /app/cache -> not needed for the demo
+    storage:               # writable paths for the non-root process (original: emptyDir volumes); needs _generic >= v3.3
+      - type: emptyDir
+        role: tmp
+        mount: /tmp
+      - type: emptyDir
+        role: cache
+        mount: /app/cache
     secrets: []
     env:
       - name: PORT

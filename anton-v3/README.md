@@ -69,7 +69,7 @@ catalog; the manifests keep `tag: latest` only as the fallback.
 | Traefik `Ingress` with path routing | `targets.openshift.expose: route` only | OpenShift: Route on `<base>.<routeDomain>`. k3s: no ingress — use the Service/NodePort or add the ingress out-of-band |
 | `ConfigMap`s (`load-test-config`, `vulnerable-echo-config`) | inlined as `env` | same effect, no separate object |
 | `fieldRef` env (`POD_NAME`, `status.hostIP`) | not expressible | `POD_NAME` dropped (informational); agent host = property |
-| `emptyDir` volumes (`/tmp`, `/app/cache`, `/app/logs`) | only one PVC per product | dropped — writable root FS (`readOnlyRootFilesystem: false` in the original) |
+| `emptyDir` volumes (`/tmp`, `/app/cache`, `/app/logs`) | **supported since `_generic` v3.3** (`storage[].type: emptyDir`, any number; still max one PVC) | restored in both manifests — required once the process runs as UID 1000, because the image's root-owned directories are no longer writable |
 | resources / replicas | profile `sizing` / `redundancy` | never authored in the manifest |
 | Instana / Prometheus annotations, labels | not expressible | Instana still sees the pods via the agent; `instana-autotrace` label not settable |
 | chat-app `command`/`args` override (`unset LD_PRELOAD …`) + pod label `instana-autotrace: "false"` | not expressible | **verified 2026-09-10:** with the AutoTrace webhook active, the injected Instana Python sensor collides with the app's OTel/Traceloop instrumentation → `/health` 500. Therefore `tracing-enabled` defaults to `"false"`; set it to `"true"` only after opting the namespace out (`kubectl label ns <ns> instana-autotrace=false`) |

@@ -46,7 +46,14 @@ spec:
     ports:
       - name: http
         port: 8080
-    storage: []            # original: emptyDir /app/logs (1Gi) + /tmp — not needed for the demo
+    storage:               # writable paths for the non-root process (original: emptyDir volumes); needs _generic >= v3.3
+      - type: emptyDir
+        role: logs
+        mount: /app/logs
+        sizeLimit: 1Gi
+      - type: emptyDir
+        role: tmp
+        mount: /tmp
     secrets: []
     env:
       - name: JAVA_OPTS

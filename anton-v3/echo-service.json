@@ -46,7 +46,19 @@
           "port": 8080
         }
       ],
-      "storage": [],
+      "storage": [
+        {
+          "type": "emptyDir",
+          "role": "logs",
+          "mount": "/app/logs",
+          "sizeLimit": "1Gi"
+        },
+        {
+          "type": "emptyDir",
+          "role": "tmp",
+          "mount": "/tmp"
+        }
+      ],
       "secrets": [],
       "env": [
         {

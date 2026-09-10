@@ -92,7 +92,18 @@
           "port": 8080
         }
       ],
-      "storage": [],
+      "storage": [
+        {
+          "type": "emptyDir",
+          "role": "tmp",
+          "mount": "/tmp"
+        },
+        {
+          "type": "emptyDir",
+          "role": "cache",
+          "mount": "/app/cache"
+        }
+      ],
       "secrets": [],
       "env": [
         {
