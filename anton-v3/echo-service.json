@@ -1,0 +1,114 @@
+{
+  "metadata": {
+    "name": "echo-service"
+  },
+  "spec": {
+    "id": "echo-service-001",
+    "global-properties": {
+      "tennant": {},
+      "security": {},
+      "environment": {}
+    },
+    "properties": {
+      "t-shirt": {
+        "source": "input",
+        "enum": [
+          "S",
+          "M",
+          "L",
+          "XL"
+        ],
+        "default": "M"
+      },
+      "redundancy": {
+        "source": "input",
+        "enum": [
+          "none",
+          "ha"
+        ],
+        "default": "none"
+      },
+      "spring-profiles": {
+        "source": "input",
+        "default": "production,vulnerable"
+      }
+    },
+    "requirements": [],
+    "deployment": {
+      "image": {
+        "family": "docker.io/mbx1010/echo-service",
+        "tag": "3.0.0",
+        "version": "default"
+      },
+      "ports": [
+        {
+          "name": "http",
+          "port": 8085
+        },
+        {
+          "name": "management",
+          "port": 8080
+        }
+      ],
+      "storage": [],
+      "secrets": [],
+      "env": [
+        {
+          "name": "SERVER_PORT",
+          "value": "8085"
+        },
+        {
+          "name": "JAVA_OPTS",
+          "value": "-Xmx512m -Xms256m -Dlog4j.configurationFile=/app/log4j2.xml"
+        },
+        {
+          "name": "LOG4J_FORMAT_MSG_NO_LOOKUPS",
+          "value": "false"
+        },
+        {
+          "name": "LOG4J2_DISABLE_JNDI",
+          "value": "false"
+        },
+        {
+          "name": "SPRING_PROFILES_ACTIVE",
+          "fromProperty": "spring-profiles"
+        }
+      ],
+      "probes": {
+        "httpGet": {
+          "path": "/health",
+          "port": 8085
+        }
+      },
+      "security": {
+        "runAsNonRoot": true
+      },
+      "outputs": {
+        "fqdn": {
+          "template": "${serviceFqdn}"
+        },
+        "http-port": {
+          "value": 8085
+        },
+        "url": {
+          "template": "http://${serviceFqdn}:8085"
+        }
+      },
+      "targets": {
+        "openshift": {
+          "expose": "none"
+        },
+        "k8s": {
+          "expose": "none"
+        }
+      }
+    }
+  },
+  "status": {
+    "success": {
+      "fqdn": {},
+      "http-port": {},
+      "url": {}
+    }
+  }
+}

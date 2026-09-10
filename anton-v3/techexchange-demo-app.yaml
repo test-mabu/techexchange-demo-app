@@ -1,0 +1,144 @@
+# AntonV3 manifest — techexchange-demo-app (root node = Load Test App, Flask)
+#
+# Graph:  techexchange-demo-app -> { echo-service, juice-shop, chat-app }
+# Build order (bottom-up): echo-service, juice-shop, chat-app -> techexchange-demo-app
+#
+# Data-driven product: deployed by the _generic worker (no specific worker needed).
+# The three backend URLs are WIRED from the dependencies' outputs (source: output) —
+# nothing is hardcoded, so the graph works in any namespace / tenant.
+#
+# YAML subset only (Find's parser): block style, no anchors, no block scalars.
+
+metadata:
+  name: techexchange-demo-app
+
+spec:
+  id: techexchange-demo-app-001
+
+  global-properties:
+    tennant: {}        # set at order time -> overrides the target namespace (per-student namespace)
+    security: {}
+    environment: {}
+
+  properties:
+    # ---- order-time inputs ----
+    t-shirt:
+      source: input
+      enum:
+        - S
+        - M
+        - L
+        - XL
+      default: M           # profile sizing[M] -> resources (original: 256Mi/100m req, 512Mi/250m lim)
+    redundancy:
+      source: input
+      enum:
+        - none
+        - ha
+      default: none        # original ran replicas: 2 -> order with redundancy=ha
+    instana-agent-host:
+      source: input
+      default: ""          # node IP of the Instana agent DaemonSet (original: fieldRef status.hostIP,
+                           # which AntonV3 cannot express — pass the host explicitly or leave empty)
+    log-level:
+      source: input
+      enum:
+        - DEBUG
+        - INFO
+        - WARNING
+      default: INFO
+
+    # ---- wired dependency outputs ----
+    echo-url:
+      source: output
+      id: echo-service-001
+      output: url
+    juice-url:
+      source: output
+      id: juice-shop-001
+      output: url
+    chat-url:
+      source: output
+      id: chat-app-001
+      output: url
+
+  requirements:
+    - name: echo-service
+      id: echo-service-001
+      required: true
+      global-properties: {}
+      properties: {}
+    - name: juice-shop
+      id: juice-shop-001
+      required: true
+      global-properties: {}
+      properties: {}
+    - name: chat-app
+      id: chat-app-001
+      required: false      # optional: the LLM demo needs an external vLLM/Ollama endpoint
+      global-properties: {}
+      properties: {}
+
+  deployment:
+    image:
+      family: docker.io/mbx1010/load-test-app   # pipeline pushes <DOCKERHUB_USERNAME>/load-test-app
+      tag: "2.0"                                 # fallback; the catalog pins 2.0 by digest (pipeline also tags git SHAs)
+      version: default
+    ports:
+      - name: http
+        port: 8080
+    storage: []            # original used emptyDir for /tmp and /app/cache -> not needed for the demo
+    secrets: []
+    env:
+      - name: PORT
+        value: "8080"
+      - name: HOST
+        value: "0.0.0.0"
+      - name: FLASK_ENV
+        value: production
+      - name: LOG_LEVEL
+        fromProperty: log-level
+      - name: ECHO_SERVICE_URL
+        fromProperty: echo-url
+      - name: JUICE_SHOP_URL
+        fromProperty: juice-url
+      - name: CHAT_SERVICE_URL
+        fromProperty: chat-url
+      # Instana Python sensor (in-process, see original deployment comment)
+      - name: AUTOWRAP_PACKAGES
+        value: instana
+      - name: INSTANA_AGENT_HOST
+        fromProperty: instana-agent-host
+      - name: INSTANA_AGENT_PORT
+        value: "42699"
+      - name: INSTANA_SERVICE_NAME
+        value: load-test-app
+      - name: INSTANA_ENABLE_W3C_TRACE_CORRELATION
+        value: "true"
+    probes:
+      httpGet:
+        path: /health
+        port: 8080
+    security:
+      runAsNonRoot: true
+    outputs:
+      fqdn:
+        template: "${serviceFqdn}"
+      http-port:
+        value: 8080
+      url:
+        template: "http://${serviceFqdn}:8080"
+      route-host:
+        template: "${routeHost}"       # only filled when targets.<target>.expose = route
+    targets:
+      openshift:
+        expose: route                  # Route <base>.<routeDomain> (profile) — replaces the Traefik ingress
+      k8s:
+        expose: none                   # k3s/Traefik ingress is outside the v3 data model (see README)
+
+status:
+  success:
+    fqdn: {}
+    http-port: {}
+    url: {}
+    route-host: {}

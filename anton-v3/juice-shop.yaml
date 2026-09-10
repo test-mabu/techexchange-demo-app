@@ -1,0 +1,68 @@
+# AntonV3 manifest — juice-shop (OWASP Juice Shop, public image from Docker Hub)
+#
+# Leaf node, no requirements. Deployed by the _generic worker.
+
+metadata:
+  name: juice-shop
+
+spec:
+  id: juice-shop-001
+
+  global-properties:
+    tennant: {}
+    security: {}
+    environment: {}
+
+  properties:
+    t-shirt:
+      source: input
+      enum:
+        - S
+        - M
+        - L
+        - XL
+      default: M           # original: 256Mi/200m req, 512Mi/500m lim
+    redundancy:
+      source: input
+      enum:
+        - none
+        - ha
+      default: none
+
+  requirements: []
+
+  deployment:
+    image:
+      family: docker.io/bkimminich/juice-shop
+      tag: v20.2.0         # fallback; the catalog pins v20.2.0 by digest
+      version: default
+    ports:
+      - name: http
+        port: 3000
+    storage: []
+    secrets: []
+    env: []
+    probes:
+      httpGet:
+        path: /
+        port: 3000
+    security:
+      runAsNonRoot: false  # the original manifest sets no securityContext; the image runs as node user
+    outputs:
+      fqdn:
+        template: "${serviceFqdn}"
+      http-port:
+        value: 3000
+      url:
+        template: "http://${serviceFqdn}:3000"
+    targets:
+      openshift:
+        expose: none
+      k8s:
+        expose: none
+
+status:
+  success:
+    fqdn: {}
+    http-port: {}
+    url: {}

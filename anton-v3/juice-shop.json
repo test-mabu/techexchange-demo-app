@@ -1,0 +1,85 @@
+{
+  "metadata": {
+    "name": "juice-shop"
+  },
+  "spec": {
+    "id": "juice-shop-001",
+    "global-properties": {
+      "tennant": {},
+      "security": {},
+      "environment": {}
+    },
+    "properties": {
+      "t-shirt": {
+        "source": "input",
+        "enum": [
+          "S",
+          "M",
+          "L",
+          "XL"
+        ],
+        "default": "M"
+      },
+      "redundancy": {
+        "source": "input",
+        "enum": [
+          "none",
+          "ha"
+        ],
+        "default": "none"
+      }
+    },
+    "requirements": [],
+    "deployment": {
+      "image": {
+        "family": "docker.io/bkimminich/juice-shop",
+        "tag": "v20.2.0",
+        "version": "default"
+      },
+      "ports": [
+        {
+          "name": "http",
+          "port": 3000
+        }
+      ],
+      "storage": [],
+      "secrets": [],
+      "env": [],
+      "probes": {
+        "httpGet": {
+          "path": "/",
+          "port": 3000
+        }
+      },
+      "security": {
+        "runAsNonRoot": false
+      },
+      "outputs": {
+        "fqdn": {
+          "template": "${serviceFqdn}"
+        },
+        "http-port": {
+          "value": 3000
+        },
+        "url": {
+          "template": "http://${serviceFqdn}:3000"
+        }
+      },
+      "targets": {
+        "openshift": {
+          "expose": "none"
+        },
+        "k8s": {
+          "expose": "none"
+        }
+      }
+    }
+  },
+  "status": {
+    "success": {
+      "fqdn": {},
+      "http-port": {},
+      "url": {}
+    }
+  }
+}

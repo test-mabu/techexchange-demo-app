@@ -1,0 +1,188 @@
+{
+  "metadata": {
+    "name": "techexchange-demo-app"
+  },
+  "spec": {
+    "id": "techexchange-demo-app-001",
+    "global-properties": {
+      "tennant": {},
+      "security": {},
+      "environment": {}
+    },
+    "properties": {
+      "t-shirt": {
+        "source": "input",
+        "enum": [
+          "S",
+          "M",
+          "L",
+          "XL"
+        ],
+        "default": "M"
+      },
+      "redundancy": {
+        "source": "input",
+        "enum": [
+          "none",
+          "ha"
+        ],
+        "default": "none"
+      },
+      "instana-agent-host": {
+        "source": "input",
+        "default": ""
+      },
+      "log-level": {
+        "source": "input",
+        "enum": [
+          "DEBUG",
+          "INFO",
+          "WARNING"
+        ],
+        "default": "INFO"
+      },
+      "echo-url": {
+        "source": "output",
+        "id": "echo-service-001",
+        "output": "url"
+      },
+      "juice-url": {
+        "source": "output",
+        "id": "juice-shop-001",
+        "output": "url"
+      },
+      "chat-url": {
+        "source": "output",
+        "id": "chat-app-001",
+        "output": "url"
+      }
+    },
+    "requirements": [
+      {
+        "name": "echo-service",
+        "id": "echo-service-001",
+        "required": true,
+        "global-properties": {},
+        "properties": {}
+      },
+      {
+        "name": "juice-shop",
+        "id": "juice-shop-001",
+        "required": true,
+        "global-properties": {},
+        "properties": {}
+      },
+      {
+        "name": "chat-app",
+        "id": "chat-app-001",
+        "required": false,
+        "global-properties": {},
+        "properties": {}
+      }
+    ],
+    "deployment": {
+      "image": {
+        "family": "docker.io/mbx1010/load-test-app",
+        "tag": "2.0",
+        "version": "default"
+      },
+      "ports": [
+        {
+          "name": "http",
+          "port": 8080
+        }
+      ],
+      "storage": [],
+      "secrets": [],
+      "env": [
+        {
+          "name": "PORT",
+          "value": "8080"
+        },
+        {
+          "name": "HOST",
+          "value": "0.0.0.0"
+        },
+        {
+          "name": "FLASK_ENV",
+          "value": "production"
+        },
+        {
+          "name": "LOG_LEVEL",
+          "fromProperty": "log-level"
+        },
+        {
+          "name": "ECHO_SERVICE_URL",
+          "fromProperty": "echo-url"
+        },
+        {
+          "name": "JUICE_SHOP_URL",
+          "fromProperty": "juice-url"
+        },
+        {
+          "name": "CHAT_SERVICE_URL",
+          "fromProperty": "chat-url"
+        },
+        {
+          "name": "AUTOWRAP_PACKAGES",
+          "value": "instana"
+        },
+        {
+          "name": "INSTANA_AGENT_HOST",
+          "fromProperty": "instana-agent-host"
+        },
+        {
+          "name": "INSTANA_AGENT_PORT",
+          "value": "42699"
+        },
+        {
+          "name": "INSTANA_SERVICE_NAME",
+          "value": "load-test-app"
+        },
+        {
+          "name": "INSTANA_ENABLE_W3C_TRACE_CORRELATION",
+          "value": "true"
+        }
+      ],
+      "probes": {
+        "httpGet": {
+          "path": "/health",
+          "port": 8080
+        }
+      },
+      "security": {
+        "runAsNonRoot": true
+      },
+      "outputs": {
+        "fqdn": {
+          "template": "${serviceFqdn}"
+        },
+        "http-port": {
+          "value": 8080
+        },
+        "url": {
+          "template": "http://${serviceFqdn}:8080"
+        },
+        "route-host": {
+          "template": "${routeHost}"
+        }
+      },
+      "targets": {
+        "openshift": {
+          "expose": "route"
+        },
+        "k8s": {
+          "expose": "none"
+        }
+      }
+    }
+  },
+  "status": {
+    "success": {
+      "fqdn": {},
+      "http-port": {},
+      "url": {},
+      "route-host": {}
+    }
+  }
+}

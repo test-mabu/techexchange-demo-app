@@ -1,0 +1,182 @@
+{
+  "metadata": {
+    "name": "chat-app"
+  },
+  "spec": {
+    "id": "chat-app-001",
+    "global-properties": {
+      "tennant": {},
+      "security": {},
+      "environment": {}
+    },
+    "properties": {
+      "t-shirt": {
+        "source": "input",
+        "enum": [
+          "S",
+          "M",
+          "L",
+          "XL"
+        ],
+        "default": "S"
+      },
+      "redundancy": {
+        "source": "input",
+        "enum": [
+          "none",
+          "ha"
+        ],
+        "default": "none"
+      },
+      "llm-provider": {
+        "source": "input",
+        "enum": [
+          "openai",
+          "ollama"
+        ],
+        "default": "openai"
+      },
+      "llm-base-url": {
+        "source": "input",
+        "default": "http://192.168.178.190:8000/v1"
+      },
+      "llm-model": {
+        "source": "input",
+        "default": "gpt-oss-120b"
+      },
+      "llm-api-key": {
+        "source": "input",
+        "default": "ollama"
+      },
+      "tracing-enabled": {
+        "source": "input",
+        "enum": [
+          "true",
+          "false"
+        ],
+        "default": "true"
+      },
+      "otlp-endpoint": {
+        "source": "input",
+        "default": "http://instana-agent.instana-agent:4318"
+      }
+    },
+    "requirements": [],
+    "deployment": {
+      "image": {
+        "family": "docker.io/mbx1010/chat-app",
+        "tag": "2.0",
+        "version": "default"
+      },
+      "ports": [
+        {
+          "name": "http",
+          "port": 8080
+        }
+      ],
+      "storage": [],
+      "secrets": [
+        {
+          "name-role": "secrets",
+          "keys": {
+            "llm-api-key": {
+              "fromProperty": "llm-api-key"
+            }
+          }
+        }
+      ],
+      "env": [
+        {
+          "name": "LLM_PROVIDER",
+          "fromProperty": "llm-provider"
+        },
+        {
+          "name": "LLM_BASE_URL",
+          "fromProperty": "llm-base-url"
+        },
+        {
+          "name": "LLM_MODEL",
+          "fromProperty": "llm-model"
+        },
+        {
+          "name": "LLM_API_KEY",
+          "fromSecret": {
+            "role": "secrets",
+            "key": "llm-api-key"
+          }
+        },
+        {
+          "name": "SYSTEM_PROMPT",
+          "value": "You are a helpful assistant for an IBM AIOps demo. Keep answers concise."
+        },
+        {
+          "name": "LLM_TIMEOUT",
+          "value": "120"
+        },
+        {
+          "name": "TRACING_ENABLED",
+          "fromProperty": "tracing-enabled"
+        },
+        {
+          "name": "TRACELOOP_BASE_URL",
+          "fromProperty": "otlp-endpoint"
+        },
+        {
+          "name": "OTEL_EXPORTER_OTLP_ENDPOINT",
+          "fromProperty": "otlp-endpoint"
+        },
+        {
+          "name": "TRACELOOP_APP_NAME",
+          "value": "chat-app"
+        },
+        {
+          "name": "OTEL_SERVICE_NAME",
+          "value": "chat-app"
+        },
+        {
+          "name": "TRACELOOP_TELEMETRY",
+          "value": "false"
+        },
+        {
+          "name": "LLM_METRICS_ENABLED",
+          "value": "false"
+        }
+      ],
+      "probes": {
+        "httpGet": {
+          "path": "/health",
+          "port": 8080
+        }
+      },
+      "security": {
+        "runAsNonRoot": false
+      },
+      "outputs": {
+        "fqdn": {
+          "template": "${serviceFqdn}"
+        },
+        "http-port": {
+          "value": 8080
+        },
+        "url": {
+          "template": "http://${serviceFqdn}:8080"
+        }
+      },
+      "targets": {
+        "openshift": {
+          "expose": "none"
+        },
+        "k8s": {
+          "expose": "none"
+        }
+      }
+    }
+  },
+  "status": {
+    "success": {
+      "fqdn": {},
+      "http-port": {},
+      "url": {}
+    }
+  }
+}

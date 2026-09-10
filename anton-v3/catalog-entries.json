@@ -1,0 +1,52 @@
+{
+  "techexchange-demo-app": {
+    "default": "2.0",
+    "versions": {
+      "2.0": {
+        "image": "docker.io/mbx1010/load-test-app:2.0",
+        "registry_digest": "sha256:d8d2d13c0ee686c66a14115e775b744a1d8d79256c895e79702b5386997036c9",
+        "status": "supported",
+        "downgrade_safe": true
+      }
+    }
+  },
+  "echo-service": {
+    "default": "3.0.0",
+    "versions": {
+      "3.0.0": {
+        "image": "docker.io/mbx1010/echo-service:3.0.0",
+        "registry_digest": "sha256:434e216faec081847f13471aa21f53b4290aa309edaeb49ba14f386cc9636f01",
+        "status": "supported",
+        "downgrade_safe": true
+      },
+      "2.0.0": {
+        "image": "docker.io/mbx1010/echo-service:2.0.0",
+        "registry_digest": "sha256:c618ff5703dc102d2b7fefd9f7d71135456bc2f137fd2cbc2b5850e372c4121b",
+        "status": "deprecated",
+        "downgrade_safe": true
+      }
+    }
+  },
+  "chat-app": {
+    "default": "2.0",
+    "versions": {
+      "2.0": {
+        "image": "docker.io/mbx1010/chat-app:2.0",
+        "registry_digest": "sha256:25fa3986a7bd968bfee96aa68c7a96a3a0864962739b5f872434444d18612dc9",
+        "status": "supported",
+        "downgrade_safe": true
+      }
+    }
+  },
+  "juice-shop": {
+    "default": "v20.2.0",
+    "versions": {
+      "v20.2.0": {
+        "image": "docker.io/bkimminich/juice-shop:v20.2.0",
+        "registry_digest": "sha256:8739101ade29358abb5469ee66ae78e582c97ed0a5543a4ad102e5fa5193526b",
+        "status": "supported",
+        "downgrade_safe": true
+      }
+    }
+  }
+}
