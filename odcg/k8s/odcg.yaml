@@ -57,7 +57,7 @@ spec:
       dnsPolicy: ClusterFirstWithHostNet
       containers:
       - name: odcg
-        image: docker.io/mbx1010/otel-dc-genai:1.0.10
+        image: mbx1010/otel-dc-genai:1.0.10
         imagePullPolicy: Always
         ports: [{containerPort: 8000, name: otlp-grpc}]
         volumeMounts:

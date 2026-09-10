@@ -85,7 +85,7 @@ spec:
     spec:
       containers:
       - name: chat-app
-        image: docker.io/mbx1010/chat-app:2.0
+        image: mbx1010/chat-app:2.0
         imagePullPolicy: Always
         # Instana AutoTrace injects a Python sitecustomize via PYTHONPATH (and
         # LD_PRELOAD), setting up an OTel provider at interpreter start that

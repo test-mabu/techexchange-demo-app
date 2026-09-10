@@ -6,17 +6,19 @@ name: Build, Push, SBOM, Scan and Deploy
 # 16 students share one workflow definition without collisions.
 #
 # Required repo/org secrets (set by provisioning/provision-gitea-students.sh):
-#   GIT_REGISTRY   - Gitea registry host:port, e.g. almabuild.example.com:3000
-#   GIT_USERNAME   - Gitea username (the student)
-#   GIT_TOKEN      - Gitea password or access token
-#   KUBECONFIG     - namespace-scoped kubeconfig (plain or base64)
-#   BASE_DOMAIN    - base domain for ingress, e.g. lab.example.com
+#   GIT_REGISTRY        - Gitea registry host:port (still used for checkout URL)
+#   GIT_USERNAME        - Gitea username (the student)
+#   GIT_TOKEN           - Gitea password or access token
+#   KUBECONFIG          - namespace-scoped kubeconfig (plain or base64)
+#   BASE_DOMAIN         - base domain for ingress, e.g. lab.example.com
+#   DOCKERHUB_USERNAME  - Docker Hub username (images are pushed here)
+#   DOCKERHUB_TOKEN     - Docker Hub access token or password
 # Optional:
 #   NAMESPACE      - override namespace (default: repo owner, lowercased)
 #   INGRESS_HOST   - override hostname (default: <namespace>.<BASE_DOMAIN>)
 #   SAST_ENABLE    - "true" to run Semgrep SAST
 # Concert upload
-#   CONCERT_URL          https://sundown1.fyre.ibm.com:12443 
+#   CONCERT_URL          https://sundown1.fyre.ibm.com:12443
 #   CONCERT_API_KEY      abcdefg
 #   CONCERT_INSTANCE_ID  0000-0000-0000-0000
 
@@ -67,12 +69,14 @@ jobs:
       - name: Validate required secrets
         run: |
           MISSING=""
-          for s in GIT_REGISTRY GIT_USERNAME GIT_TOKEN KUBECONFIG; do
+          for s in GIT_REGISTRY GIT_USERNAME GIT_TOKEN KUBECONFIG DOCKERHUB_USERNAME DOCKERHUB_TOKEN; do
             case "$s" in
-              GIT_REGISTRY) v="${{ secrets.GIT_REGISTRY }}";;
-              GIT_USERNAME) v="${{ secrets.GIT_USERNAME }}";;
-              GIT_TOKEN)    v="${{ secrets.GIT_TOKEN }}";;
-              KUBECONFIG)   v="${{ secrets.KUBECONFIG }}";;
+              GIT_REGISTRY)       v="${{ secrets.GIT_REGISTRY }}";;
+              GIT_USERNAME)       v="${{ secrets.GIT_USERNAME }}";;
+              GIT_TOKEN)          v="${{ secrets.GIT_TOKEN }}";;
+              KUBECONFIG)         v="${{ secrets.KUBECONFIG }}";;
+              DOCKERHUB_USERNAME) v="${{ secrets.DOCKERHUB_USERNAME }}";;
+              DOCKERHUB_TOKEN)    v="${{ secrets.DOCKERHUB_TOKEN }}";;
             esac
             if [ -z "$v" ]; then
               echo "Missing secret: $s"
@@ -188,20 +192,11 @@ jobs:
       # ------------------------------------------------------------------
       - name: Configure Docker for HTTP registry and login
         run: |
-          if command -v sudo &> /dev/null; then SUDO="sudo"; else SUDO=""; fi
-          REGISTRY="${{ secrets.GIT_REGISTRY }}"
-          DAEMON_JSON="/etc/docker/daemon.json"
-
-          if ! grep -q "$REGISTRY" "$DAEMON_JSON" 2>/dev/null; then
-            $SUDO mkdir -p /etc/docker
-            printf '{\n  "insecure-registries": ["%s"]\n}\n' "$REGISTRY" | $SUDO tee "$DAEMON_JSON"
-            $SUDO systemctl restart docker || true
-            sleep 5
-          fi
-
-          echo "${{ secrets.GIT_TOKEN }}" | docker login "http://${REGISTRY}" \
-            --username "${{ secrets.GIT_USERNAME }}" --password-stdin
-          echo "Logged in to registry ${REGISTRY}"
+          # Log in to Docker Hub (images are pushed there)
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login \
+            --username "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+          echo "Logged in to Docker Hub as ${{ secrets.DOCKERHUB_USERNAME }}"
+          echo "DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}" >> $GITHUB_ENV
 
       # ------------------------------------------------------------------
       - name: SAST scan (Semgrep, optional)
@@ -360,7 +355,7 @@ jobs:
 
       - name: Build and push Java echo service
         run: |
-          IMAGE="${{ secrets.GIT_REGISTRY }}/${REPO_LOWER}/echo-service"
+          IMAGE="${DOCKERHUB_USERNAME}/echo-service"
           if [ "${BUILD_MODE}" = "online" ]; then
             echo "=== Building java echo service (online — Dockerfile.online, deps from Maven Central) ==="
             cat java-app/Dockerfile.online
@@ -389,7 +384,7 @@ jobs:
 
       - name: Build and push Python load-test app
         run: |
-          IMAGE="${{ secrets.GIT_REGISTRY }}/${REPO_LOWER}/load-test-app"
+          IMAGE="${DOCKERHUB_USERNAME}/load-test-app"
           if [ "${BUILD_MODE}" = "online" ]; then
             echo "=== Building python load-test app (online — Dockerfile.online, deps from PyPI/Debian) ==="
             cat python-app/Dockerfile.online
@@ -425,7 +420,7 @@ jobs:
           # NOTE: Concert v2 rejects purl URLs of the form http://<IP>:<port>/...
           # ("Invalid URL format") — use a hostname in GIT_REGISTRY for v2.
           REPO_URL="http://${GITEA_HOST}:${GITEA_PORT}/${{ gitea.repository }}"
-          REG="${{ secrets.GIT_REGISTRY }}"
+          REG="docker.io/${DOCKERHUB_USERNAME}"
           APP_SBOM="$WORKSPACE_DIR/application-sbom.json"
 
           # ConcertDef 1.0.2 is strict (additionalProperties:false):
@@ -503,7 +498,7 @@ jobs:
           echo "============================================"
           OUTDIR="$WORKSPACE_DIR/sboms"
           mkdir -p "$OUTDIR"
-          IMAGES="${{ secrets.GIT_REGISTRY }}/${REPO_LOWER}/echo-service:latest ${{ secrets.GIT_REGISTRY }}/${REPO_LOWER}/load-test-app:latest bkimminich/juice-shop:latest"
+          IMAGES="${DOCKERHUB_USERNAME}/echo-service:latest ${DOCKERHUB_USERNAME}/load-test-app:latest bkimminich/juice-shop:latest"
           echo "SBOM generation for images: $IMAGES"
           for image in $IMAGES; do
             safe=$(echo "$image" | tr '/:' '__')
@@ -546,7 +541,7 @@ jobs:
           echo "============================================"
           OUTDIR="$WORKSPACE_DIR/vuln-scans"
           mkdir -p "$OUTDIR"
-          IMAGES="${{ secrets.GIT_REGISTRY }}/${REPO_LOWER}/echo-service:latest ${{ secrets.GIT_REGISTRY }}/${REPO_LOWER}/load-test-app:latest bkimminich/juice-shop:latest"
+          IMAGES="${DOCKERHUB_USERNAME}/echo-service:latest ${DOCKERHUB_USERNAME}/load-test-app:latest bkimminich/juice-shop:latest"
 
           # Air-gap flags: trivy binary pre-installed by load.sh; DB pre-seeded.
           TRIVY_FLAGS="--skip-db-update --skip-java-db-update"
@@ -612,7 +607,7 @@ jobs:
           echo "Deploying into namespace ${NAMESPACE} ..."
           subst() { sed -e "s|\${NAMESPACE}|${NAMESPACE}|g" \
                         -e "s|\${INGRESS_HOST}|${INGRESS_HOST}|g" \
-                        -e "s|\${IMAGE_REGISTRY}|${{ secrets.GIT_REGISTRY }}|g" \
+                        -e "s|\${IMAGE_REGISTRY}|docker.io|g" \
                         -e "s|\${IMAGE_TAG}|${{ gitea.sha }}|g" "$1"; }
 
           # Namespace-level objects (SA, Role, demo secret). The namespace itself
@@ -623,11 +618,11 @@ jobs:
 
           # Echo service
           subst $WORKSPACE_DIR/k8s/echo-service-deployment.yaml \
-            | sed -e "s|\${IMAGE_REPOSITORY}|${REPO_LOWER}/echo-service|g" | "$KUBECTL_BIN" apply -f -
+            | sed -e "s|\${IMAGE_REPOSITORY}|${DOCKERHUB_USERNAME}/echo-service|g" | "$KUBECTL_BIN" apply -f -
 
           # Load-test app
           subst $WORKSPACE_DIR/k8s/python-app-deployment.yaml \
-            | sed -e "s|\${IMAGE_REPOSITORY}|${REPO_LOWER}/load-test-app|g" | "$KUBECTL_BIN" apply -f -
+            | sed -e "s|\${IMAGE_REPOSITORY}|${DOCKERHUB_USERNAME}/load-test-app|g" | "$KUBECTL_BIN" apply -f -
 
           # Juice Shop
           subst $WORKSPACE_DIR/k8s/juice-shop-deployment.yaml | "$KUBECTL_BIN" apply -f -
@@ -665,6 +660,6 @@ jobs:
           echo "  http://${INGRESS_HOST}          (load-test app UI)"
           echo "  http://${INGRESS_HOST}/echo-service/api/echo  (vulnerable echo service)"
           echo ""
-          echo "Images built and pushed:"
-          echo "  ${{ secrets.GIT_REGISTRY }}/${REPO_LOWER}/echo-service:latest"
-          echo "  ${{ secrets.GIT_REGISTRY }}/${REPO_LOWER}/load-test-app:latest"
+          echo "Images built and pushed to Docker Hub:"
+          echo "  ${DOCKERHUB_USERNAME}/echo-service:latest"
+          echo "  ${DOCKERHUB_USERNAME}/load-test-app:latest"
