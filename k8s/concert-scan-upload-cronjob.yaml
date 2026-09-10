@@ -1,0 +1,119 @@
+# Runs scripts/concert-scan-upload.sh inside the cluster as a CronJob.
+#
+# One-time setup (namespace = the namespace whose running images you scan):
+#   NS=load-testing
+#   kubectl -n $NS create secret generic concert-credentials \
+#       --from-literal=api-key='<base64 user:apikey>' \
+#       --from-literal=instance-id='0000-0000-0000-0000' \
+#       --from-literal=url='https://concert3.lab.allwaysbeginner.com:12443'
+#   kubectl -n $NS create configmap concert-scan-upload-script \
+#       --from-file=concert-scan-upload.sh=scripts/concert-scan-upload.sh
+#   kubectl -n $NS apply -f k8s/concert-scan-upload-cronjob.yaml
+#
+# Run it right now instead of waiting for the schedule:
+#   kubectl -n $NS create job --from=cronjob/concert-scan-upload concert-scan-upload-now
+#   kubectl -n $NS logs -f job/concert-scan-upload-now
+#
+# After editing the script, refresh the ConfigMap:
+#   kubectl -n $NS create configmap concert-scan-upload-script \
+#       --from-file=concert-scan-upload.sh=scripts/concert-scan-upload.sh -o yaml --dry-run=client | kubectl apply -f -
+#
+# The pod needs outbound access to Docker Hub / your registry (trivy pulls the
+# images), to ghcr.io (trivy vulnerability DB) and to Concert.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: concert-scan-upload
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: concert-scan-upload
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: concert-scan-upload
+subjects:
+  - kind: ServiceAccount
+    name: concert-scan-upload
+roleRef:
+  kind: Role
+  name: concert-scan-upload
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: concert-scan-upload
+spec:
+  schedule: "30 6 * * *"          # daily 06:30 UTC, before Concert's Instana discovery run (~07:37 UTC)
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 3600
+      template:
+        spec:
+          serviceAccountName: concert-scan-upload
+          restartPolicy: Never
+          containers:
+            - name: scan
+              # trivy is preinstalled; bash/curl/python3 are added at start (alpine apk)
+              image: aquasec/trivy:0.72.0
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -e
+                  apk add --no-cache bash curl python3 >/dev/null
+                  export HOME=/work
+                  exec bash /scripts/concert-scan-upload.sh \
+                    -n "${NAMESPACE}" -a "${APP_NAME}" -v "${APP_VERSION}" -o /work/out
+              env:
+                - name: NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+                # Concert application as imported from Instana (application perspective name)
+                - name: APP_NAME
+                  value: "load-testing"
+                - name: APP_VERSION
+                  value: "1.0.0"
+                # Optional: explicit image list instead of the running pods, e.g. "docker.io/mbx1010/chat-app:2.0"
+                # - name: IMAGES
+                #   value: ""
+                - name: CONCERT_URL
+                  valueFrom:
+                    secretKeyRef: { name: concert-credentials, key: url }
+                - name: CONCERT_INSTANCE_ID
+                  valueFrom:
+                    secretKeyRef: { name: concert-credentials, key: instance-id }
+                - name: CONCERT_API_KEY
+                  valueFrom:
+                    secretKeyRef: { name: concert-credentials, key: api-key }
+                - name: TRIVY_CACHE_DIR
+                  value: /work/trivy-cache
+                - name: POLL_TIMEOUT
+                  value: "300"
+              resources:
+                requests: { cpu: 250m, memory: 1Gi }
+                limits: { cpu: "2", memory: 3Gi }
+              volumeMounts:
+                - name: script
+                  mountPath: /scripts
+                - name: work
+                  mountPath: /work
+          volumes:
+            - name: script
+              configMap:
+                name: concert-scan-upload-script
+                defaultMode: 0755
+            - name: work
+              emptyDir: {}
