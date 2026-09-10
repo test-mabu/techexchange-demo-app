@@ -151,7 +151,9 @@
         }
       },
       "security": {
-        "runAsNonRoot": false
+        "runAsNonRoot": true,
+        "runAsUser": 1000,
+        "runAsGroup": 1000
       },
       "outputs": {
         "fqdn": {

@@ -120,10 +120,10 @@ spec:
       httpGet:
         path: /health
         port: 8080
-    security:
-      runAsNonRoot: false  # image USER is the name 'appuser' (non-root, but not numeric): with true k8s refuses
-                           # "image has non-numeric user (appuser), cannot verify user is non-root". The original
-                           # fixes this with runAsUser: 1000, which v3 cannot express -> see README
+    security:              # as in the original deployment (needs _generic >= v3.2 for runAsUser/runAsGroup)
+      runAsNonRoot: true
+      runAsUser: 1000      # image USER is the name 'appuser'; k8s can only verify non-root with a numeric UID
+      runAsGroup: 1000
     outputs:
       fqdn:
         template: "${serviceFqdn}"

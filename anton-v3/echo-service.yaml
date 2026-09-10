@@ -61,9 +61,10 @@ spec:
       httpGet:
         path: /health
         port: 8080
-    security:
-      runAsNonRoot: false  # the image runs as root; the original pins runAsUser: 1000, which v3 cannot express
-                           # (with true the pod fails: "container has runAsNonRoot and image will run as root")
+    security:              # as in the original deployment (needs _generic >= v3.2 for runAsUser/runAsGroup)
+      runAsNonRoot: true
+      runAsUser: 1000      # the image's default USER is root; forcing UID 1000 is what the original does
+      runAsGroup: 1000
     outputs:
       fqdn:
         template: "${serviceFqdn}"
