@@ -72,7 +72,8 @@ catalog; the manifests keep `tag: latest` only as the fallback.
 | `emptyDir` volumes (`/tmp`, `/app/cache`, `/app/logs`) | only one PVC per product | dropped — writable root FS (`readOnlyRootFilesystem: false` in the original) |
 | resources / replicas | profile `sizing` / `redundancy` | never authored in the manifest |
 | Instana / Prometheus annotations, labels | not expressible | Instana still sees the pods via the agent; `instana-autotrace` label not settable |
-| chat-app `command`/`args` override (`unset LD_PRELOAD …`) | not expressible | only needed when the AutoTrace webhook injects into the pod |
+| chat-app `command`/`args` override (`unset LD_PRELOAD …`) + pod label `instana-autotrace: "false"` | not expressible | **verified 2026-09-10:** with the AutoTrace webhook active, the injected Instana Python sensor collides with the app's OTel/Traceloop instrumentation → `/health` 500. Therefore `tracing-enabled` defaults to `"false"`; set it to `"true"` only after opting the namespace out (`kubectl label ns <ns> instana-autotrace=false`) |
+| echo-service `runAsUser: 1000` | only `runAsNonRoot` | **verified 2026-09-10:** the image runs as root → `runAsNonRoot: false`, otherwise `CreateContainerConfigError` |
 | `demo-hub` (nginx + HTML ConfigMap) | needs a ConfigMap mount | not included — bake the HTML into an image or write a specific worker |
 | `ServiceAccount` + `Role` + `app-secrets` | profile `serviceAccount`; secrets unused by the apps | dropped |
 

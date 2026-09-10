@@ -52,7 +52,12 @@ spec:
       enum:
         - "true"
         - "false"
-      default: "true"
+      default: "false"    # "true" only when the Instana AutoTrace webhook is opted out for the pod/namespace
+                          # (label instana-autotrace=false): the injected Instana Python sensor collides with
+                          # the app's OpenTelemetry/Traceloop instrumentation -> /health 500
+                          # ("InstanaTracer.start_span() got an unexpected keyword argument 'context'").
+                          # The original chat-app.yaml solves this with a pod label + args override,
+                          # neither of which the v3 data model can express.
     otlp-endpoint:
       source: input
       default: "http://instana-agent.instana-agent:4318"

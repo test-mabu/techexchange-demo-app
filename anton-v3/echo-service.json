@@ -81,7 +81,7 @@
         }
       },
       "security": {
-        "runAsNonRoot": true
+        "runAsNonRoot": false
       },
       "outputs": {
         "fqdn": {

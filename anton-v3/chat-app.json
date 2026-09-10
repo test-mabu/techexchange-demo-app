@@ -54,7 +54,7 @@
           "true",
           "false"
         ],
-        "default": "true"
+        "default": "false"
       },
       "otlp-endpoint": {
         "source": "input",

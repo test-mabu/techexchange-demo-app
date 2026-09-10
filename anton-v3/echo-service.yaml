@@ -63,7 +63,8 @@ spec:
         path: /health
         port: 8085
     security:
-      runAsNonRoot: true
+      runAsNonRoot: false  # the image runs as root; the original pins runAsUser: 1000, which v3 cannot express
+                           # (with true the pod fails: "container has runAsNonRoot and image will run as root")
     outputs:
       fqdn:
         template: "${serviceFqdn}"
