@@ -1,0 +1,25 @@
+# One-shot download of the Concert models into the Spark's HF cache (hostPath).
+# kubectl -n spark-ai apply -f hf-download-job.yaml && kubectl -n spark-ai logs -f job/hf-download
+apiVersion: batch/v1
+kind: Job
+metadata: {name: hf-download, namespace: spark-ai}
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: hf
+        image: vllm/vllm-openai@sha256:251eba5cc7c12fed0b75da22a9240e582b1c9e39f6fbc064f86781b963bd814f
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/sh","-c"]
+        args:
+        - |
+          set -e
+          hf download ibm-granite/granite-embedding-125m-english | tail -1
+          hf download ibm-granite/granite-4.1-30b-fp8 | tail -1
+        volumeMounts: [{name: hfcache, mountPath: /root/.cache/huggingface}]
+      volumes:
+      - name: hfcache
+        hostPath: {path: /home/manfred/.cache/huggingface, type: Directory}

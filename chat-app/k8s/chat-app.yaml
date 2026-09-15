@@ -6,9 +6,12 @@ metadata:
   namespace: load-testing
 data:
   # ---- LLM backend (OpenAI-compatible for all three) ----
-  # Active: vLLM on the GPU box (.190), OpenAI-compatible API.
+  # Active: LiteLLM router on the GPU box (.190:4000) in front of vLLM.
+  # gpt-oss-120b and Granite 4.1 30B are swapped by the Spark gpu-manager (only one
+  # fits in memory); the router falls back to whichever is loaded, so the chat keeps
+  # working during a Concert demo on Granite. See docs/spark-llm-host.md.
   LLM_PROVIDER: "openai"
-  LLM_BASE_URL: "http://192.168.178.190:8000/v1"
+  LLM_BASE_URL: "http://192.168.178.190:4000/v1"
   LLM_MODEL: "gpt-oss-120b"
   #
   # -- Ollama preset (previous default):

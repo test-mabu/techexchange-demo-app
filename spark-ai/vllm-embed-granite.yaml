@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: vllm-embed-granite, namespace: spark-ai, labels: {app: vllm-embed-granite}}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: vllm-embed-granite}}
+  template:
+    metadata: {labels: {app: vllm-embed-granite}}
+    spec:
+      runtimeClassName: nvidia
+      hostIPC: true
+      containers:
+      - name: vllm
+        image: vllm/vllm-openai@sha256:251eba5cc7c12fed0b75da22a9240e582b1c9e39f6fbc064f86781b963bd814f
+        imagePullPolicy: IfNotPresent
+        command: ["vllm"]
+        args: ["serve","ibm-granite/granite-embedding-125m-english","--served-model-name","ibm-granite/granite-embedding-125m-english","--port","8006","--gpu-memory-utilization","0.02","--dtype","bfloat16","--max-model-len","512"]
+        env:
+        - {name: OTEL_SERVICE_NAME, value: vllm-granite-embedding}
+        ports: [{containerPort: 8006}]
+        resources: {limits: {nvidia.com/gpu: 1}}
+        startupProbe: {httpGet: {path: /health, port: 8006}, periodSeconds: 5, failureThreshold: 60}
+        livenessProbe: {httpGet: {path: /health, port: 8006}, periodSeconds: 15, failureThreshold: 4}
+        volumeMounts: [{name: hfcache, mountPath: /root/.cache/huggingface}]
+      volumes:
+      - name: hfcache
+        hostPath: {path: /home/manfred/.cache/huggingface, type: Directory}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: vllm-embed-granite, namespace: spark-ai}
+spec:
+  type: LoadBalancer
+  selector: {app: vllm-embed-granite}
+  ports: [{name: http, port: 8006, targetPort: 8006}]

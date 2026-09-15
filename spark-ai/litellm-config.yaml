@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: litellm-config, namespace: spark-ai}
+data:
+  config.yaml: |
+    model_list:
+      # Concert Workflows LLM_MODEL -> Deployment vllm-granite (:8001), swapped with gpt-oss by gpu-manager
+      - model_name: ibm-granite/granite-4.1-30b
+        litellm_params: {model: openai/ibm-granite/granite-4.1-30b, api_base: "http://vllm-granite.spark-ai.svc.cluster.local:8001/v1", api_key: none}
+      - model_name: ibm-granite/granite-4.1-30b-fp8
+        litellm_params: {model: openai/ibm-granite/granite-4.1-30b, api_base: "http://vllm-granite.spark-ai.svc.cluster.local:8001/v1", api_key: none}
+      # Concert Workflows EMBED_MODEL -> Deployment vllm-embed-granite (:8006), always on
+      - model_name: ibm-granite/granite-embedding-125m-english
+        litellm_params: {model: openai/ibm-granite/granite-embedding-125m-english, api_base: "http://vllm-embed-granite.spark-ai.svc.cluster.local:8006/v1", api_key: none}
+      # bge-m3 (:8002), always on
+      - model_name: bge-m3
+        litellm_params: {model: openai/bge-m3, api_base: "http://vllm-embed.spark-ai.svc.cluster.local:8002/v1", api_key: none}
+      # gpt-oss-120b (:8000), the demo chat-app model; swapped with Granite by gpu-manager
+      - model_name: gpt-oss-120b
+        litellm_params: {model: openai/gpt-oss-120b, api_base: "http://vllm-gptoss.spark-ai.svc.cluster.local:8000/v1", api_key: none}
+    litellm_settings:
+      drop_params: true
+      request_timeout: 600
+      num_retries: 0
+      # Whichever big model is swapped out, requests for it are answered by the other one.
+      fallbacks:
+        - gpt-oss-120b: ["ibm-granite/granite-4.1-30b"]
+        - ibm-granite/granite-4.1-30b: ["gpt-oss-120b"]
+        - ibm-granite/granite-4.1-30b-fp8: ["gpt-oss-120b"]
+    general_settings:
+      disable_spend_logs: true

@@ -1,0 +1,53 @@
+# wx-emu: watsonx.ai API emulator in front of the Spark LiteLLM router, for IBM Concert core GenAI.
+# Code is mounted from the ConfigMap (create it with:
+#   kubectl -n load-testing create configmap wx-emu-code --from-file=app.py=wx-emu/app.py --from-file=gen_cert.py=wx-emu/gen_cert.py --dry-run=client -o yaml | kubectl apply -f -)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wx-emu
+  namespace: load-testing
+  labels: {app: wx-emu, component: ai}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: wx-emu}}
+  template:
+    metadata:
+      labels: {app: wx-emu, component: ai}
+      annotations: {instana-autotrace: "false"}
+    spec:
+      containers:
+      - name: wx-emu
+        image: python:3.12-slim
+        command: ["/bin/sh", "-c"]
+        # The ibm_watsonx_ai SDK refuses non-https URLs, so serve TLS with a self-signed cert
+        # generated at start (SAN = shared IP). Clients verify=off (WX_CLIENT_VERIFY_REQUESTS=false).
+        args: ["pip install --quiet --no-cache-dir 'fastapi>=0.115,<1' 'uvicorn>=0.30,<1' 'httpx>=0.27,<1' 'cryptography>=42' && python /app/gen_cert.py /tmp/tls && exec uvicorn app:app --host 0.0.0.0 --port 8700 --app-dir /app --ssl-keyfile /tmp/tls/tls.key --ssl-certfile /tmp/tls/tls.crt"]
+        env:
+        - {name: UPSTREAM_BASE_URL, value: "http://192.168.178.190:4000/v1"}
+        - {name: CHAT_MODEL, value: "ibm-granite/granite-4.1-30b"}
+        - {name: EMBED_MODEL, value: "ibm-granite/granite-embedding-125m-english"}
+        ports: [{containerPort: 8700, name: http}]
+        volumeMounts: [{name: code, mountPath: /app, readOnly: true}]
+        resources:
+          requests: {cpu: 50m, memory: 128Mi}
+          limits: {cpu: "1", memory: 512Mi}
+        startupProbe: {httpGet: {path: /health, port: 8700, scheme: HTTPS}, periodSeconds: 5, failureThreshold: 60}
+        readinessProbe: {httpGet: {path: /health, port: 8700, scheme: HTTPS}, periodSeconds: 10}
+      volumes:
+      - name: code
+        configMap: {name: wx-emu-code}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wx-emu
+  namespace: load-testing
+  labels: {app: wx-emu}
+  annotations:
+    metallb.universe.tf/loadBalancerIPs: "192.168.178.216"
+    metallb.universe.tf/allow-shared-ip: "demo-stack"
+spec:
+  type: LoadBalancer
+  selector: {app: wx-emu}
+  ports: [{name: http, port: 8700, targetPort: 8700}]

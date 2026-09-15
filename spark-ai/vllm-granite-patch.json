@@ -1,0 +1,36 @@
+[
+  {
+    "op": "replace",
+    "path": "/spec/template/spec/containers/0/args",
+    "value": [
+      "serve",
+      "ibm-granite/granite-4.1-30b-fp8",
+      "--served-model-name",
+      "ibm-granite/granite-4.1-30b",
+      "ibm-granite/granite-4.1-30b-fp8",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8001",
+      "--kv-cache-dtype",
+      "fp8",
+      "--kv-cache-memory-bytes",
+      "8589934592",
+      "--gpu-memory-utilization",
+      "0.60",
+      "--max-model-len",
+      "32768",
+      "--max-num-seqs",
+      "8",
+      "--max-num-batched-tokens",
+      "8192",
+      "--enable-prefix-caching",
+      "--enable-chunked-prefill",
+      "--enable-auto-tool-choice",
+      "--tool-call-parser",
+      "hermes",
+      "--otlp-traces-endpoint",
+      "http://otel-collector:4319/v1/traces"
+    ]
+  }
+]

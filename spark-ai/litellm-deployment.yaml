@@ -1,0 +1,54 @@
+# LiteLLM router (Deployment + Service). Config: litellm-config.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm
+  namespace: spark-ai
+  labels: {app: litellm}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: litellm}}
+  template:
+    metadata:
+      labels: {app: litellm}
+    spec:
+      containers:
+      - name: litellm
+        image: ghcr.io/berriai/litellm:main-stable
+        imagePullPolicy: IfNotPresent
+        args: ["--config", "/etc/litellm/config.yaml", "--port", "4000"]
+        ports: [{containerPort: 4000, name: http}]
+        env:
+        - {name: LITELLM_LOG, value: "INFO"}
+        - {name: LITELLM_TELEMETRY, value: "False"}
+        volumeMounts:
+        - {name: config, mountPath: /etc/litellm, readOnly: true}
+        resources:
+          requests: {cpu: 200m, memory: 512Mi}
+          limits: {cpu: "2", memory: 2Gi}
+        startupProbe:
+          httpGet: {path: /health/liveliness, port: 4000}
+          periodSeconds: 5
+          failureThreshold: 60
+        readinessProbe:
+          httpGet: {path: /health/readiness, port: 4000}
+          periodSeconds: 10
+        livenessProbe:
+          httpGet: {path: /health/liveliness, port: 4000}
+          periodSeconds: 20
+      volumes:
+      - name: config
+        configMap: {name: litellm-config}
+---
+# k3s ServiceLB publishes this on the node IP: http://192.168.178.190:4000
+apiVersion: v1
+kind: Service
+metadata:
+  name: litellm
+  namespace: spark-ai
+  labels: {app: litellm}
+spec:
+  type: LoadBalancer
+  selector: {app: litellm}
+  ports: [{name: http, port: 4000, targetPort: 4000}]
