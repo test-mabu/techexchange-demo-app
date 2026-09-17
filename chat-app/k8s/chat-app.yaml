@@ -12,7 +12,7 @@ data:
   # working during a Concert demo on Granite. See docs/spark-llm-host.md.
   LLM_PROVIDER: "openai"
   LLM_BASE_URL: "http://192.168.178.190:4000/v1"
-  LLM_MODEL: "gpt-oss-120b"
+  LLM_MODEL: "ibm-granite/granite-4.1-30b-fp8"
   #
   # -- Ollama preset (previous default):
   #   LLM_PROVIDER: "ollama"

@@ -1,0 +1,232 @@
+{
+  "bomFormat": "ConcertDef",
+  "specVersion": "1.0.2",
+  "metadata": {
+    "timestamp": "2026-09-17T14:52:53Z",
+    "type": "application",
+    "component": {
+      "name": "kubernetes_demo-environment_load-testing_load-testing",
+      "version": "1.0.0"
+    }
+  },
+  "components": [
+    {
+      "bom-ref": "build:vulnerable-echo-service",
+      "type": "build",
+      "name": "vulnerable-echo-service",
+      "version": "2.0",
+      "components": [
+        {
+          "bom-ref": "image:mbx1010/vulnerable-echo-service",
+          "type": "container",
+          "name": "mbx1010/vulnerable-echo-service",
+          "tag": "2.0"
+        },
+        {
+          "bom-ref": "code:test-mabu/techexchange-demo-app",
+          "type": "code",
+          "name": "test-mabu/techexchange-demo-app",
+          "purl": "https://github.com/test-mabu/techexchange-demo-app",
+          "branch": "main"
+        }
+      ]
+    },
+    {
+      "bom-ref": "build:load-test-app",
+      "type": "build",
+      "name": "load-test-app",
+      "version": "2.0",
+      "components": [
+        {
+          "bom-ref": "image:mbx1010/load-test-app",
+          "type": "container",
+          "name": "mbx1010/load-test-app",
+          "tag": "2.0"
+        }
+      ]
+    },
+    {
+      "bom-ref": "build:chat-app",
+      "type": "build",
+      "name": "chat-app",
+      "version": "2.0",
+      "components": [
+        {
+          "bom-ref": "image:mbx1010/chat-app",
+          "type": "container",
+          "name": "mbx1010/chat-app",
+          "tag": "2.0"
+        }
+      ]
+    },
+    {
+      "bom-ref": "build:otel-dc-genai",
+      "type": "build",
+      "name": "otel-dc-genai",
+      "version": "1.0.10",
+      "components": [
+        {
+          "bom-ref": "image:mbx1010/otel-dc-genai",
+          "type": "container",
+          "name": "mbx1010/otel-dc-genai",
+          "tag": "1.0.10"
+        }
+      ]
+    },
+    {
+      "bom-ref": "build:juice-shop",
+      "type": "build",
+      "name": "juice-shop",
+      "version": "latest",
+      "components": [
+        {
+          "bom-ref": "image:bkimminich/juice-shop",
+          "type": "container",
+          "name": "bkimminich/juice-shop",
+          "tag": "latest"
+        }
+      ]
+    },
+    {
+      "bom-ref": "build:nginx",
+      "type": "build",
+      "name": "nginx",
+      "version": "1.27-alpine",
+      "components": [
+        {
+          "bom-ref": "image:nginx",
+          "type": "container",
+          "name": "nginx",
+          "tag": "1.27-alpine"
+        }
+      ]
+    },
+    {
+      "bom-ref": "build:curl",
+      "type": "build",
+      "name": "curl",
+      "version": "8.11.1",
+      "components": [
+        {
+          "bom-ref": "image:curlimages/curl",
+          "type": "container",
+          "name": "curlimages/curl",
+          "tag": "8.11.1"
+        }
+      ]
+    }
+  ],
+  "services": [
+    {
+      "bom-ref": "appapi:load-test-service",
+      "name": "load-test-service",
+      "endpoints": [
+        "/",
+        "/health",
+        "/echo",
+        "/stress"
+      ],
+      "properties": [
+        {
+          "name": "network_exposure",
+          "value": "public"
+        }
+      ]
+    },
+    {
+      "bom-ref": "appapi:vulnerable-echo-service",
+      "name": "vulnerable-echo-service",
+      "endpoints": [
+        "/",
+        "/echo"
+      ],
+      "properties": [
+        {
+          "name": "network_exposure",
+          "value": "public"
+        }
+      ]
+    },
+    {
+      "bom-ref": "appapi:juice-shop-service",
+      "name": "juice-shop-service",
+      "endpoints": [
+        "/"
+      ],
+      "properties": [
+        {
+          "name": "network_exposure",
+          "value": "public"
+        }
+      ]
+    },
+    {
+      "bom-ref": "appapi:demo-hub-service",
+      "name": "demo-hub-service",
+      "endpoints": [
+        "/"
+      ],
+      "properties": [
+        {
+          "name": "network_exposure",
+          "value": "public"
+        }
+      ]
+    }
+  ],
+  "environments": [
+    {
+      "bom-ref": "env:kubernetes",
+      "type": "environment",
+      "name": "kubernetes",
+      "access-points": [
+        {
+          "ref": "appapi:load-test-service",
+          "base-url": "http://192.168.178.216",
+          "port": 8080
+        },
+        {
+          "ref": "appapi:vulnerable-echo-service",
+          "base-url": "http://192.168.178.216",
+          "port": 8085
+        },
+        {
+          "ref": "appapi:juice-shop-service",
+          "base-url": "http://192.168.178.216",
+          "port": 3000
+        },
+        {
+          "ref": "appapi:demo-hub-service",
+          "base-url": "http://192.168.178.216",
+          "port": 80
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "build:vulnerable-echo-service",
+      "dependsOn": [
+        "appapi:vulnerable-echo-service"
+      ]
+    },
+    {
+      "ref": "build:load-test-app",
+      "dependsOn": [
+        "appapi:load-test-service"
+      ]
+    },
+    {
+      "ref": "build:juice-shop",
+      "dependsOn": [
+        "appapi:juice-shop-service"
+      ]
+    },
+    {
+      "ref": "build:nginx",
+      "dependsOn": [
+        "appapi:demo-hub-service"
+      ]
+    }
+  ]
+}

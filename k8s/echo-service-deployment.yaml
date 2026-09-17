@@ -45,7 +45,7 @@ spec:
         fsGroup: 1000
       containers:
       - name: vulnerable-echo-service
-        image: ${IMAGE_REGISTRY}/${IMAGE_REPOSITORY}:${IMAGE_TAG}
+        image: ${IMAGE_REPOSITORY}:${IMAGE_TAG}
         imagePullPolicy: Always
         ports:
         - containerPort: 8085

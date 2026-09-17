@@ -1,0 +1,96 @@
+# vllm-granite — Tuning für GB10 / Blackwell (sm_121), Stand 17.09.2026
+#
+# Anwenden:
+#   kubectl --context ngx-spark -n spark-ai patch deploy vllm-granite \
+#     --patch-file spark-ai/vllm-granite.tuning-patch.yaml
+#
+# Zurückrollen:
+#   kubectl --context ngx-spark -n spark-ai apply -f spark-ai/vllm-granite.CURRENT-BACKUP-2026-09-17.yaml
+#
+# Gemessene Ausgangslage vor der Änderung: 179 Token in 22,3 s = 8,0 Token/s (warm).
+# Concert unterstellt in ibm_concert_genai/utils/timer.py fest 20 Token/s
+# (Timeout = max_tokens // 20 + 1), deshalb ist der Durchsatz hier relevant.
+#
+# Geprüft im laufenden Container, bevor das hier entstand:
+#   - flashinfer ist im Image vorhanden (flash_attn nicht)
+#   - torch 2.11.0+cu130, Compute Capability (12, 1) = sm_121
+#   - Node gx10-870f: 127,5 GiB RAM, 20 CPU, aktuell nur 4 % Memory-Requests belegt
+#   - strategy ist Recreate -> beim Anwenden gibt es einen Modell-Neuladevorgang
+#
+# Vier Änderungen gegenüber dem Ist-Stand:
+#   1. --kv-cache-memory-bytes entfällt, --gpu-memory-utilization 0.60 -> 0.68.
+#      Absolute und prozentuale Angabe zusammen sind widersprüchlich.
+#   2. /dev/shm als eigenes tmpfs (16 Gi). hostIPC ist true, aber ohne eigenen Mount
+#      nutzt der Container das /dev/shm des Hosts — bei 32k Kontext ein SIGBUS-Risiko.
+#   3. CPU- und Memory-Requests gesetzt. Bisher stand dort nur nvidia.com/gpu,
+#      k3s könnte den Pod bei Speicherdruck verdrängen.
+#   4. FLASHINFER als Attention-Backend und volle CUDA-Graphs.
+#
+# Punkt 4 ist der einzige mit echtem Startrisiko. Wenn der Pod nicht hochkommt,
+# zuerst nur VLLM_ATTENTION_BACKEND herausnehmen, nicht gleich alles zurückrollen.
+spec:
+  template:
+    spec:
+      containers:
+      - name: vllm
+        args:
+          - serve
+          - ibm-granite/granite-4.1-30b-fp8
+          - --served-model-name
+          - ibm-granite/granite-4.1-30b
+          - ibm-granite/granite-4.1-30b-fp8
+          - --host
+          - 0.0.0.0
+          - --port
+          - "8001"
+          - --kv-cache-dtype
+          - fp8
+          - --gpu-memory-utilization
+          - "0.68"
+          - --max-model-len
+          - "32768"
+          - --max-num-seqs
+          - "8"
+          - --max-num-batched-tokens
+          - "8192"
+          - --enable-prefix-caching
+          - --enable-chunked-prefill
+          - --enable-auto-tool-choice
+          - --tool-call-parser
+          - hermes
+          - --otlp-traces-endpoint
+          - http://otel-collector:4319/v1/traces
+        env:
+          - name: VLLM_ATTENTION_BACKEND
+            value: "FLASHINFER"
+          - name: VLLM_CUDA_GRAPH_MODE
+            value: "full_and_piecewise"
+          - name: OTEL_SERVICE_NAME
+            value: vllm-granite-30b
+          - name: OTEL_EXPORTER_OTLP_TRACES_PROTOCOL
+            value: http/protobuf
+          - name: OTEL_RESOURCE_ATTRIBUTES
+            value: host.name=gx10-870f,k8s.node.name=gx10-870f,k8s.namespace.name=spark-ai,k8s.cluster.name=spark-k3s
+        resources:
+          limits:
+            nvidia.com/gpu: "1"
+            memory: "85Gi"
+            cpu: "14"
+          requests:
+            nvidia.com/gpu: "1"
+            memory: "50Gi"
+            cpu: "8"
+        volumeMounts:
+          - mountPath: /root/.cache/huggingface
+            name: hfcache
+          - mountPath: /dev/shm
+            name: dshm
+      volumes:
+        - name: hfcache
+          hostPath:
+            path: /home/manfred/.cache/huggingface
+            type: Directory
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
