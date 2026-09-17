@@ -1,0 +1,88 @@
+# wx-emu on the Concert cluster (concert3, k3s) — in-cluster variant.
+#
+# Preferred over k8s/wx-emu.yaml, which runs it on the workload cluster behind a MetalLB
+# address. Concert pins this service's certificate AND its URL, so both must outlive
+# everything around them. Running it next to Concert removes three failure sources:
+#   * no LoadBalancer address to lose when the other cluster is redeployed
+#   * certificate on DNS names instead of an IP, so it survives any address change
+#   * no dependency on the master-node cluster being up at all
+#
+# Concert reaches it at https://wx-emu.wx-emu.svc:8700 (ClusterIP, no external exposure).
+#
+# Deploy:
+#   CERT_NAMESPACE=wx-emu CERT_IPS=127.0.0.1 python3 wx-emu/gen_cert.py /tmp/wx-tls
+#   kubectl apply -f wx-emu/k8s/wx-emu-concert3.yaml
+#   kubectl -n wx-emu create secret tls wx-emu-tls --cert=/tmp/wx-tls/tls.crt --key=/tmp/wx-tls/tls.key
+#   kubectl -n wx-emu create configmap wx-emu-code \
+#     --from-file=app.py=wx-emu/app.py --from-file=gen_cert.py=wx-emu/gen_cert.py \
+#     --dry-run=client -o yaml | kubectl apply -f -
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: wx-emu
+  labels: {component: ai}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wx-emu
+  namespace: wx-emu
+  labels: {app: wx-emu, component: ai}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: wx-emu}}
+  template:
+    metadata:
+      labels: {app: wx-emu, component: ai}
+      annotations: {instana-autotrace: "false"}
+    spec:
+      containers:
+      - name: wx-emu
+        image: python:3.12-slim
+        command: ["/bin/sh", "-c"]
+        # Never generate the cert at start: Concert pins it, and a fresh cert on every
+        # restart silently kills the GenAI path (risk service then returns 504).
+        args: ["pip install --quiet --no-cache-dir 'fastapi>=0.115,<1' 'uvicorn>=0.30,<1' 'httpx>=0.27,<1' && exec uvicorn app:app --host 0.0.0.0 --port 8700 --app-dir /app --ssl-keyfile /tls/tls.key --ssl-certfile /tls/tls.crt"]
+        env:
+        - {name: UPSTREAM_BASE_URL, value: "http://192.168.178.190:4000/v1"}
+        # Granite, NICHT gpt-oss: gpt-oss ist ein Reasoning-Modell und verbraucht das
+        # Zeitbudget mit Thinking-Tokens, bevor Ausgabe entsteht. Concerts Risiko-
+        # bewertung reisst damit ihren fest verdrahteten Timeout (max_tokens//20+1).
+        # Gemessen 2026-09-16: gpt-oss ~90s (Timeout) gegen Granite 61-70s (Erfolg).
+        - {name: CHAT_MODEL, value: "ibm-granite/granite-4.1-30b"}
+        - {name: EMBED_MODEL, value: "ibm-granite/granite-embedding-125m-english"}
+        # Admission control OFF. Refusing Concert's batches with 503 trips its circuit
+        # breaker and pauses risk assessment entirely (learned 2026-09-16). Raise this
+        # only if the refusal behaviour is revisited; see app.py for the reasoning.
+        - {name: MAX_INFLIGHT, value: "0"}
+        # 600s wie im Cluster aktiv. Der frueher hier stehende Wert 120 stammt aus der
+        # Zeit mit gpt-oss; laengere GenAI-Antworten (z. B. die Angriffsvektor-Erklaerung
+        # zu einer CVE) brauchen mehr. Concert bricht ohnehin selbst frueher ab.
+        - {name: UPSTREAM_TIMEOUT, value: "600"}
+        ports: [{containerPort: 8700, name: https}]
+        volumeMounts:
+        - {name: code, mountPath: /app, readOnly: true}
+        - {name: tls, mountPath: /tls, readOnly: true}
+        resources:
+          requests: {cpu: 50m, memory: 128Mi}
+          limits: {cpu: "2", memory: 1Gi}
+        startupProbe: {httpGet: {path: /health, port: 8700, scheme: HTTPS}, periodSeconds: 5, failureThreshold: 60}
+        readinessProbe: {httpGet: {path: /health, port: 8700, scheme: HTTPS}, periodSeconds: 10}
+      volumes:
+      - name: code
+        configMap: {name: wx-emu-code}
+      - name: tls
+        secret: {secretName: wx-emu-tls}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wx-emu
+  namespace: wx-emu
+  labels: {app: wx-emu}
+spec:
+  # ClusterIP on purpose: only Concert calls this, and it lives in the same cluster.
+  type: ClusterIP
+  selector: {app: wx-emu}
+  ports: [{name: https, port: 8700, targetPort: 8700}]
