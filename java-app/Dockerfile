@@ -9,7 +9,7 @@ RUN mvn -o -B -Dmaven.repo.local=/root/.m2 package -DskipTests
 
 FROM eclipse-temurin:11.0.17_8-jre
 LABEL vulnerability="CVE-2021-44228"
-LABEL log4j-version="2.14.1"
+LABEL log4j-version="2.25.4"
 
 # Alternative newer runtime base image for air-gapped use:
 # FROM eclipse-temurin:11.0.29_7-jre
