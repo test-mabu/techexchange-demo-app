@@ -1,0 +1,224 @@
+name: Build, scan and release echo service
+
+# Runs on the self-hosted runner on build-61 (labels build-61, txdemo).
+# Public repo + self-hosted runner: never trigger on pull_request, so code from
+# forks can never run on the build host.
+#
+# mode=build     (push to main / default): build java-app with Dockerfile.online,
+#                Log4Shell smoke test, Trivy scan, push, Concert upload, release record.
+# mode=baseline  register an EXISTING image (default mbx1010/vulnerable-echo-service:2.0):
+#                pull, smoke test (report only), Trivy scan, release record. No build, no push.
+#
+# Credentials stay on the build host (never in the repo or in this log):
+#   ~/.config/sbom/concert.env  CONCERT_HOST (host:port), CONCERT_INSTANCE, CONCERT_B64
+#   ~/.docker/config.json       Docker Hub login for mbx1010
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "java-app/**"
+      - ".github/workflows/build-scan-release.yaml"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "build or baseline"
+        type: choice
+        options: [build, baseline]
+        default: build
+      image:
+        description: "baseline only: existing image to register"
+        default: "mbx1010/vulnerable-echo-service:2.0"
+      release:
+        description: "release line used as image tag in build mode"
+        default: "2.1"
+
+concurrency:
+  group: build-scan-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_REPO: mbx1010/vulnerable-echo-service
+  APP_NAME: kubernetes_demo-environment_load-testing_load-testing
+  APP_VERSION: "1.0.0"
+  REPO_URL: https://github.com/test-mabu/techexchange-demo-app
+  RELEASE_DIR: /home/manfred/tx-scan/releases
+
+jobs:
+  build-scan-release:
+    runs-on: [self-hosted, build-61, txdemo]
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Context
+        run: |
+          MODE="${{ inputs.mode || 'build' }}"
+          SHA7="$(git rev-parse --short=7 HEAD)"
+          LOG4J="$(sed -n 's#.*<log4j.version>\(.*\)</log4j.version>.*#\1#p' java-app/pom.xml | head -1)"
+          if [ "$MODE" = "baseline" ]; then
+            REF="${{ inputs.image }}"
+          else
+            REF="${IMAGE_REPO}:${{ inputs.release || '2.1' }}"
+          fi
+          {
+            echo "MODE=$MODE"; echo "SHA7=$SHA7"; echo "LOG4J=$LOG4J"; echo "REF=$REF"
+            echo "WORK=$RUNNER_TEMP/bsr"
+          } >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/bsr" "$RELEASE_DIR"
+          echo "### Context" >> "$GITHUB_STEP_SUMMARY"
+          echo "mode **$MODE** · commit \`$SHA7\` · log4j in pom.xml **$LOG4J** · image \`$REF\`" >> "$GITHUB_STEP_SUMMARY"
+          df -h / | tail -1
+
+      - name: Build image (Dockerfile.online)
+        if: env.MODE == 'build'
+        run: |
+          docker build --pull -f java-app/Dockerfile.online \
+            --label org.opencontainers.image.revision="$SHA7" \
+            --label org.opencontainers.image.source="$REPO_URL" \
+            -t "$REF" -t "${IMAGE_REPO}:${SHA7}" java-app
+
+      - name: Pull existing image
+        if: env.MODE == 'baseline'
+        run: docker pull "$REF"
+
+      - name: Smoke test - health and Log4Shell lookup
+        run: |
+          # Harmless probe: ${java:version} is a Log4j lookup without network access.
+          # Vulnerable Log4j (< 2.15) expands it in the log; a fixed one logs it literally.
+          CID=$(docker run -d --rm -p 127.0.0.1::8085 "$REF")
+          trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
+          PORT=$(docker port "$CID" 8085/tcp | head -1 | sed 's/.*://')
+          for i in $(seq 1 60); do
+            curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break
+            sleep 2
+          done
+          curl -sf "http://127.0.0.1:$PORT/health" > "$WORK/health.json" || { docker logs "$CID" | tail -40; echo "health check failed"; exit 1; }
+          curl -s -H 'X-Log4j-Test: ${java:version}' "http://127.0.0.1:$PORT/echo?message=smoke-test" > /dev/null
+          sleep 2
+          docker logs "$CID" > "$WORK/smoke.log" 2>&1
+          if grep -q 'Java version' "$WORK/smoke.log"; then
+            RESULT=expanded
+          elif grep -qF '${java:version}' "$WORK/smoke.log"; then
+            RESULT=literal
+          else
+            RESULT=unknown
+          fi
+          echo "LOOKUP=$RESULT" >> "$GITHUB_ENV"
+          grep -E 'Log4j-Test|Java version|java:version' "$WORK/smoke.log" | tail -3 || true
+          echo "### Smoke test" >> "$GITHUB_STEP_SUMMARY"
+          echo "health OK · Log4j lookup \`\${java:version}\` → **$RESULT** (expanded = vulnerable, literal = fixed)" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$MODE" = "build" ] && [ "$RESULT" != "literal" ]; then
+            echo "::error::Log4j lookup is $RESULT - the image is still vulnerable to Log4Shell"
+            exit 1
+          fi
+
+      - name: Trivy vulnerability scan
+        run: |
+          trivy image --scanners vuln --skip-version-check --quiet --format json \
+            --output "$WORK/trivy.json" "$REF"
+          python3 - "$WORK/trivy.json" <<'PY' >> "$GITHUB_ENV"
+          import json, sys, collections
+          d = json.load(open(sys.argv[1]))
+          c = collections.Counter(v["Severity"] for r in d.get("Results", []) for v in (r.get("Vulnerabilities") or []))
+          for k in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
+              print(f"SCAN_{k}={c.get(k, 0)}")
+          PY
+          echo "SCAN_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+          echo "SCAN_TOOL=trivy $(trivy --version | sed -n 's/^Version: //p')" >> "$GITHUB_ENV"
+
+      - name: Scan summary
+        run: |
+          {
+            echo "### Trivy scan of \`$REF\`"
+            echo "| Critical | High | Medium | Low |"
+            echo "|---|---|---|---|"
+            echo "| $SCAN_CRITICAL | $SCAN_HIGH | $SCAN_MEDIUM | $SCAN_LOW |"
+            echo
+            python3 - "$WORK/trivy.json" <<'PY'
+          import json, sys
+          d = json.load(open(sys.argv[1]))
+          rows = sorted({(v["VulnerabilityID"], v["PkgName"], v.get("InstalledVersion", ""), v.get("FixedVersion", ""))
+                         for r in d.get("Results", []) for v in (r.get("Vulnerabilities") or []) if v["Severity"] == "CRITICAL"})
+          print("Critical findings:" if rows else "No critical findings.")
+          for cve, pkg, inst, fix in rows:
+              print(f"- {cve} · {pkg} {inst} → fixed in {fix}")
+          PY
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Push image
+        if: env.MODE == 'build'
+        run: |
+          docker push "$REF"
+          docker push "${IMAGE_REPO}:${SHA7}"
+
+      - name: Resolve digest
+        run: |
+          DIGEST=$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$REF" | grep "^${IMAGE_REPO}@" | head -1 | sed 's/.*@//')
+          [ -n "$DIGEST" ] || { echo "::error::no registry digest for $REF"; exit 1; }
+          echo "DIGEST=$DIGEST" >> "$GITHUB_ENV"
+          echo "digest $DIGEST"
+
+      - name: Report to Concert (code_scan + package_sbom)
+        if: env.MODE == 'build'
+        run: |
+          set -a; . "$HOME/.config/sbom/concert.env"; set +a
+          UPLOAD="https://${CONCERT_HOST}/ingestion/api/v1/upload_files"
+          downgrade() { python3 - "$1" "$2" <<'PY'
+          import json, sys
+          d = json.load(open(sys.argv[1]))
+          if d.get("specVersion", "") > "1.6":
+              d["specVersion"] = "1.6"
+          json.dump(d, open(sys.argv[2], "w"))
+          PY
+          }
+          upload() {
+            resp=$(curl -sk --max-time 180 -X POST "$UPLOAD" \
+              -H "InstanceId: ${CONCERT_INSTANCE}" -H "Authorization: C_API_KEY ${CONCERT_B64}" \
+              -F "data_type=$2" -F "filename=@$1" -F "metadata=$3")
+            if grep -q '"event_ids"' <<<"$resp"; then echo "ok: $2"; else echo "::warning::$2 upload: ${resp:0:160}"; fi
+          }
+          # code_scan: CVEs in the repo's dependencies (what Secure Coder works from)
+          trivy fs --scanners vuln --offline-scan --skip-version-check --quiet \
+            --format cyclonedx --output "$WORK/code.cdx.json" .
+          downgrade "$WORK/code.cdx.json" "$WORK/code.cdx16.json"
+          upload "$WORK/code.cdx16.json" code_scan \
+            "{\"scanner_name\":\"Trivy\",\"repo_url\":\"${REPO_URL}\",\"application_name\":\"${APP_NAME}\",\"application_version\":\"${APP_VERSION}\"}"
+          # package_sbom of the new image; no image_scan - Concert's discovery owns that
+          trivy image --skip-version-check --quiet --format cyclonedx --output "$WORK/image.cdx.json" "$REF"
+          downgrade "$WORK/image.cdx.json" "$WORK/image.cdx16.json"
+          upload "$WORK/image.cdx16.json" package_sbom \
+            "{\"image_name\":\"${IMAGE_REPO}\",\"tag\":\"${REF##*:}\",\"application_name\":\"${APP_NAME}\",\"application_version\":\"${APP_VERSION}\"}"
+
+      - name: Release record
+        run: |
+          python3 - <<'PY'
+          import json, os
+          e = os.environ
+          rec = {
+              "component": "vulnerable-echo-service",
+              "version": e["REF"].rsplit(":", 1)[1],
+              "image": e["IMAGE_REPO"],
+              "digest": e["DIGEST"],
+              "commit": e["SHA7"],
+              "log4j": e["LOG4J"] if e["MODE"] == "build" else None,
+              "log4j_lookup": e["LOOKUP"],
+              "scan": {"tool": e["SCAN_TOOL"], "time": e["SCAN_TIME"], "digest": e["DIGEST"],
+                       "critical": int(e["SCAN_CRITICAL"]), "high": int(e["SCAN_HIGH"]),
+                       "medium": int(e["SCAN_MEDIUM"]), "low": int(e["SCAN_LOW"])},
+              "pipeline_run": f'{e["GITHUB_SERVER_URL"]}/{e["GITHUB_REPOSITORY"]}/actions/runs/{e["GITHUB_RUN_ID"]}',
+          }
+          path = os.path.join(e["RELEASE_DIR"], f'vulnerable-echo-service_{rec["version"]}.json')
+          json.dump(rec, open(path, "w"), indent=2)
+          print(json.dumps(rec, indent=2))
+          with open(e["GITHUB_STEP_SUMMARY"], "a") as s:
+              s.write(f'### Release record\n`{path}`\n\n```json\n{json.dumps(rec, indent=2)}\n```\n')
+          PY
+
+      - name: Clean up local build images
+        if: always() && env.MODE == 'build'
+        run: docker image prune -f >/dev/null || true
